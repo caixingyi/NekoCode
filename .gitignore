@@ -1,0 +1,16 @@
+# NekoCode 项目本地配置（可能含 api_key，勿提交）
+.nekocode.yaml
+
+# 编译产物
+/nekocode
+*.exe
+*.test
+*.out
+
+# 覆盖率
+coverage.txt
+
+# 编辑器 / 系统
+.DS_Store
+.vscode/
+.idea/
