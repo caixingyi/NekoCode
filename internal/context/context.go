@@ -93,7 +93,7 @@ func Summarize(ctx context.Context, prov provider.Provider, p config.Profile, ms
 	recent := msgs[len(msgs)-keep:]
 
 	transcript := buildTranscript(toSummarize)
-	ch := prov.Stream(ctx, summariseSystemPrompt, []message.Message{
+	ch := prov.Stream(ctx, summariseSystemPrompt, nil, []message.Message{
 		{Role: message.RoleUser, Content: transcript, CreatedAt: time.Now()},
 	})
 

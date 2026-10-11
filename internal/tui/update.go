@@ -23,8 +23,14 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m.handleStreamEvent(provider.StreamEvent(msg))
 
 	case streamClosedMsg:
+		if !m.inSecondStream && len(m.pendingCalls) > 0 {
+			return m, m.beginToolRound()
+		}
 		m.finalizeStream()
 		return m, nil
+
+	case toolResultMsg:
+		return m.onToolResult(msg)
 
 	case compactDoneMsg:
 		return m.handleCompactDone(msg)
@@ -33,7 +39,20 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.quitting {
 			return m, nil
 		}
-		switch msg.String() {
+		ks := msg.String()
+		// 确认态：只认 y/n/a（esc/ctrl+c 视为拒绝当前）。
+		if m.confirming != nil {
+			switch ks {
+			case "y":
+				return m.confirmResponse('y')
+			case "a":
+				return m.confirmResponse('a')
+			case "n", "esc", "ctrl+c":
+				return m.confirmResponse('n')
+			}
+			return m, nil
+		}
+		switch ks {
 		case "ctrl+c":
 			if m.streaming && m.cancel != nil {
 				m.cancel()
@@ -42,9 +61,13 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.quitting = true
 			return m, tea.Quit
 		case "enter":
-			if !m.streaming {
+			if !m.busy() {
 				return m.handleSubmit()
 			}
+			return m, nil
+		}
+		if m.busy() {
+			return m, nil // 流式/工具执行中不接受输入
 		}
 	}
 

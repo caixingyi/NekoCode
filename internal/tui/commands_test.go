@@ -15,7 +15,7 @@ func newTestModel(t *testing.T) *Model {
 		"claude": {Protocol: config.ProtocolAnthropic, Model: "claude-x", APIKey: "k"},
 		"openai": {Protocol: config.ProtocolOpenAI, Model: "gpt-x", APIKey: "k"},
 	}}
-	m, err := New(cfg, "claude", session.NewStore(t.TempDir()))
+	m, err := New(cfg, "claude", session.NewStore(t.TempDir()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
