@@ -10,6 +10,7 @@ import (
 	"nekocode/internal/config"
 	"nekocode/internal/message"
 	"nekocode/internal/provider"
+	"nekocode/internal/tool"
 )
 
 // fakeProvider 捕获收到的 system/msgs 并返回预设文本。
@@ -20,7 +21,7 @@ type fakeProvider struct {
 	gotMsgs   []message.Message
 }
 
-func (f *fakeProvider) Stream(ctx context.Context, system string, msgs []message.Message) <-chan provider.StreamEvent {
+func (f *fakeProvider) Stream(ctx context.Context, system string, tools []tool.Definition, msgs []message.Message) <-chan provider.StreamEvent {
 	f.gotSystem = system
 	f.gotMsgs = msgs
 	ch := make(chan provider.StreamEvent, 2)
@@ -132,7 +133,7 @@ func TestSummarizeForceBypassesThreshold(t *testing.T) {
 
 func TestSummarizeTooShortNoOp(t *testing.T) {
 	p := config.Profile{Model: "claude-x", ContextWindow: 10} // 阈值 8 tokens，容易触发
-	msgs := genMsgs(10, 20)                                    // 但消息数 10 < keep 12
+	msgs := genMsgs(10, 20)                                   // 但消息数 10 < keep 12
 	fp := &fakeProvider{text: "摘要"}
 	out, n, err := Summarize(context.Background(), fp, p, msgs, false)
 	if err != nil {

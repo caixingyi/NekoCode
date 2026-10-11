@@ -20,6 +20,9 @@ var (
 	titleStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("213"))
 	faintStyle     = lipgloss.NewStyle().Faint(true)
 	infoStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("36"))
+	toolStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
+	toolResStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
+	confirmStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
 )
 
 // View 实现 tea.Model（MVU 中的 View，纯函数渲染）。
@@ -29,7 +32,7 @@ func (m *Model) View() tea.View {
 	}
 	var b strings.Builder
 
-	if len(m.sess.Messages) == 0 && m.streamBuf == "" {
+	if len(m.sess.Messages) == 0 && m.streamBuf == "" && !m.busy() {
 		b.WriteString(m.welcome())
 	} else {
 		b.WriteString(m.header())
@@ -38,7 +41,7 @@ func (m *Model) View() tea.View {
 		b.WriteString("\n\n")
 
 		for _, msg := range m.sess.Messages {
-			if s := renderMessage(msg); s != "" {
+			if s := renderMessage(msg, m.width); s != "" {
 				b.WriteString(s)
 				b.WriteString("\n")
 			}
@@ -47,14 +50,27 @@ func (m *Model) View() tea.View {
 		// 流式中的回复（含 thinking 区块）。
 		if m.streaming && (m.streamBuf != "" || m.thinkBuf != "") {
 			if m.thinkBuf != "" {
-				b.WriteString(thinkingStyle.Render("💭 "+m.thinkBuf))
+				b.WriteString(thinkingStyle.Render("💭 " + m.thinkBuf))
 				b.WriteString("\n")
 			}
 			if m.streamBuf != "" {
-				b.WriteString(assistantStyle.Render("🤖 "+m.streamBuf))
+				b.WriteString(assistantStyle.Render("🤖 " + m.streamBuf))
 				b.WriteString("\n")
 			}
 		}
+	}
+
+	// 工具确认提示。
+	if m.confirming != nil {
+		b.WriteString(toolStyle.Render("🔧 " + m.confirming.Name))
+		b.WriteString("\n")
+		b.WriteString(m.confirmText)
+		b.WriteString("\n")
+		b.WriteString(confirmStyle.Render("执行？ [y] 允许  [n] 拒绝  [a] 本会话全部允许"))
+		b.WriteString("\n")
+	} else if m.toolExecuting {
+		b.WriteString(faintStyle.Render("⏳ 正在执行工具..."))
+		b.WriteString("\n")
 	}
 
 	if m.errMsg != "" {
@@ -67,7 +83,9 @@ func (m *Model) View() tea.View {
 	}
 
 	b.WriteString("\n")
-	b.WriteString(m.input.View())
+	if !m.busy() {
+		b.WriteString(m.input.View())
+	}
 	return tea.NewView(b.String())
 }
 
@@ -75,8 +93,8 @@ func (m *Model) View() tea.View {
 func (m *Model) welcome() string {
 	cat := catStyle.Render(strings.Join([]string{
 		` /\_/\ `,
-		`( o.o )`,
-		` > ^ < `,
+		`(・ω・)`,
+		` つ  つ`,
 	}, "\n"))
 
 	rightLines := []string{
@@ -103,19 +121,41 @@ func (m *Model) header() string {
 		"  " + faintStyle.Render("/help · Ctrl+C 退出")
 }
 
-func renderMessage(msg message.Message) string {
+func renderMessage(msg message.Message, width int) string {
 	switch msg.Role {
 	case message.RoleUser:
+		if len(msg.ToolResults) > 0 {
+			var s strings.Builder
+			for _, tr := range msg.ToolResults {
+				marker := "✓"
+				st := toolResStyle
+				if tr.IsError {
+					marker, st = "✗", errStyle
+				}
+				s.WriteString(st.Render("  " + marker + " "))
+				s.WriteString(faintStyle.Render(oneLine(tr.Content)))
+				s.WriteString("\n")
+			}
+			return strings.TrimRight(s.String(), "\n")
+		}
 		return userStyle.Render("你: ") + msg.Content
 	case message.RoleAssistant:
 		var s strings.Builder
 		if msg.Thinking != "" {
-			s.WriteString(thinkingStyle.Render("💭 "+msg.Thinking))
+			s.WriteString(thinkingStyle.Render("💭 " + msg.Thinking))
 			s.WriteString("\n")
 		}
-		s.WriteString(assistantStyle.Render("🤖 "))
-		s.WriteString(msg.Content)
-		return s.String()
+		if strings.TrimSpace(msg.Content) != "" {
+			s.WriteString(assistantStyle.Render("🤖"))
+			s.WriteString("\n")
+			s.WriteString(renderMarkdown(msg.Content, width))
+			s.WriteString("\n")
+		}
+		for _, tc := range msg.ToolCalls {
+			s.WriteString(toolStyle.Render("🔧 " + tc.Name + " " + oneLine(argsSummary(tc.Input))))
+			s.WriteString("\n")
+		}
+		return strings.TrimRight(s.String(), "\n")
 	case message.RoleSystem:
 		if msg.IsSummary {
 			return summaryStyle.Render("[摘要] " + msg.Content)
@@ -123,4 +163,18 @@ func renderMessage(msg message.Message) string {
 		return ""
 	}
 	return msg.Content
+}
+
+// argsSummary 把工具参数压成一行摘要。
+func argsSummary(input map[string]any) string {
+	if p, ok := input["path"].(string); ok {
+		return p
+	}
+	if c, ok := input["command"].(string); ok {
+		return c
+	}
+	if p, ok := input["pattern"].(string); ok {
+		return p
+	}
+	return ""
 }

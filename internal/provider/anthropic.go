@@ -12,6 +12,7 @@ import (
 
 	"nekocode/internal/config"
 	"nekocode/internal/message"
+	"nekocode/internal/tool"
 )
 
 // anthropicVersion 是 Anthropic Messages API 的版本头。
@@ -27,23 +28,28 @@ func newAnthropic(p config.Profile) (Provider, error) {
 	return &anthropicProvider{profile: p}, nil
 }
 
-// blockState 跟踪单个 content block 的状态（仅 thinking block 需要保存签名）。
+// blockState 跟踪单个 content block 的状态（thinking 保存签名；tool_use 累积参数 JSON）。
 type blockState struct {
 	isThinking bool
 	thinking   string
 	signature  string
+	isTool     bool
+	toolID     string
+	toolName   string
+	toolJSON   strings.Builder
 }
 
 // anthropicDelta 是 content_block_delta 中的 delta 字段。
 type anthropicDelta struct {
-	Type      string `json:"type"`
-	Text      string `json:"text"`
-	Thinking  string `json:"thinking"`
-	Signature string `json:"signature"`
+	Type        string `json:"type"`
+	Text        string `json:"text"`
+	Thinking    string `json:"thinking"`
+	Signature   string `json:"signature"`
+	PartialJSON string `json:"partial_json"`
 }
 
-// Stream 发起一次 Anthropic 流式对话（R8）。
-func (a *anthropicProvider) Stream(ctx context.Context, system string, msgs []message.Message) <-chan StreamEvent {
+// Stream 发起一次 Anthropic 流式对话（R8、R15）。
+func (a *anthropicProvider) Stream(ctx context.Context, system string, tools []tool.Definition, msgs []message.Message) <-chan StreamEvent {
 	ch := make(chan StreamEvent, 16)
 	go func() {
 		defer close(ch)
@@ -56,7 +62,7 @@ func (a *anthropicProvider) Stream(ctx context.Context, system string, msgs []me
 			}
 		}
 
-		body, err := message.Normalize(a.profile, system, msgs)
+		body, err := message.Normalize(a.profile, system, tools, msgs)
 		if err != nil {
 			send(StreamEvent{Type: EventError, Err: err})
 			return
@@ -100,19 +106,24 @@ func (a *anthropicProvider) Stream(ctx context.Context, system string, msgs []me
 					ContentBlock struct {
 						Type     string `json:"type"`
 						Thinking string `json:"thinking"`
+						ID       string `json:"id"`
+						Name     string `json:"name"`
 					} `json:"content_block"`
 				}
 				_ = json.Unmarshal(data, &e)
-				if e.ContentBlock.Type == "thinking" {
+				switch e.ContentBlock.Type {
+				case "thinking":
 					blocks[e.Index] = &blockState{isThinking: true, thinking: e.ContentBlock.Thinking}
 					if e.ContentBlock.Thinking != "" {
 						send(StreamEvent{Type: EventThinking, Text: e.ContentBlock.Thinking})
 					}
+				case "tool_use":
+					blocks[e.Index] = &blockState{isTool: true, toolID: e.ContentBlock.ID, toolName: e.ContentBlock.Name}
 				}
 			case "content_block_delta":
 				var e struct {
-					Index int             `json:"index"`
-					Delta anthropicDelta  `json:"delta"`
+					Index int            `json:"index"`
+					Delta anthropicDelta `json:"delta"`
 				}
 				_ = json.Unmarshal(data, &e)
 				switch e.Delta.Type {
@@ -127,15 +138,23 @@ func (a *anthropicProvider) Stream(ctx context.Context, system string, msgs []me
 					if b := blocks[e.Index]; b != nil {
 						b.signature += e.Delta.Signature
 					}
+				case "input_json_delta":
+					if b := blocks[e.Index]; b != nil && b.isTool {
+						b.toolJSON.WriteString(e.Delta.PartialJSON)
+					}
 				}
 			case "content_block_stop":
 				var e struct {
 					Index int `json:"index"`
 				}
 				_ = json.Unmarshal(data, &e)
-				if b := blocks[e.Index]; b != nil && b.isThinking && b.signature != "" {
-					// 交付该 thinking block 的签名（Text 为空）。
+				b := blocks[e.Index]
+				switch {
+				case b == nil:
+				case b.isThinking && b.signature != "":
 					send(StreamEvent{Type: EventThinking, Signature: b.signature})
+				case b.isTool:
+					send(StreamEvent{Type: EventToolCall, ToolCall: parseToolCall(b.toolID, b.toolName, b.toolJSON.String())})
 				}
 			case "message_stop":
 				send(StreamEvent{Type: EventDone})

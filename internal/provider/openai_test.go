@@ -38,7 +38,7 @@ func TestOpenAIStreamText(t *testing.T) {
 	defer srv.Close()
 
 	p, _ := newOpenAI(openaiProfile(srv.URL))
-	evs := drain(p.Stream(context.Background(), "sys", []message.Message{message.NewMessage(message.RoleUser, "hi")}))
+	evs := drain(p.Stream(context.Background(), "sys", nil, []message.Message{message.NewMessage(message.RoleUser, "hi")}))
 
 	if gotAuth != "Bearer k" {
 		t.Errorf("Authorization = %q", gotAuth)
@@ -88,7 +88,7 @@ func TestOpenAIStreamThinkingIgnored(t *testing.T) {
 	prof := openaiProfile(srv.URL)
 	prof.Thinking = &config.ThinkingConfig{Enabled: true, BudgetTokens: 2048} // 应被忽略
 	p, _ := newOpenAI(prof)
-	evs := drain(p.Stream(context.Background(), "sys", nil))
+	evs := drain(p.Stream(context.Background(), "sys", nil, nil))
 
 	var texts []string
 	done := false
@@ -113,7 +113,7 @@ func TestOpenAIStreamHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	p, _ := newOpenAI(openaiProfile(srv.URL))
-	evs := drain(p.Stream(context.Background(), "sys", nil))
+	evs := drain(p.Stream(context.Background(), "sys", nil, nil))
 	if len(evs) != 1 || evs[0].Type != EventError {
 		t.Fatalf("evs = %+v", evs)
 	}
@@ -132,7 +132,7 @@ func TestOpenAIStreamNoDoneSentinel(t *testing.T) {
 	defer srv.Close()
 
 	p, _ := newOpenAI(openaiProfile(srv.URL))
-	evs := drain(p.Stream(context.Background(), "sys", nil))
+	evs := drain(p.Stream(context.Background(), "sys", nil, nil))
 	hasDone := false
 	for _, ev := range evs {
 		if ev.Type == EventDone {
@@ -158,7 +158,7 @@ func TestOpenAIStreamCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p, _ := newOpenAI(openaiProfile(srv.URL))
-	ch := p.Stream(ctx, "sys", nil)
+	ch := p.Stream(ctx, "sys", nil, nil)
 
 	select {
 	case ev := <-ch:

@@ -10,6 +10,7 @@ import (
 
 	"nekocode/internal/config"
 	"nekocode/internal/session"
+	"nekocode/internal/tool"
 	"nekocode/internal/tui"
 )
 
@@ -77,7 +78,16 @@ func main() {
 	}
 
 	store := session.NewStore(session.DefaultDir())
-	m, err := tui.New(res.Config, res.ActiveProfile, store)
+
+	// 工具注册中心：以当前工作目录为根（R13）。
+	wd, err := os.Getwd()
+	if err != nil {
+		wd = "."
+	}
+	registry := tool.NewRegistry(wd)
+	tool.RegisterAll(registry, wd)
+
+	m, err := tui.New(res.Config, res.ActiveProfile, store, registry)
 	if err != nil {
 		fmt.Fprintln(os.Stderr, "初始化失败:", err)
 		os.Exit(1)

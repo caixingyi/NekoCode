@@ -12,6 +12,7 @@ import (
 
 	"nekocode/internal/config"
 	"nekocode/internal/message"
+	"nekocode/internal/tool"
 )
 
 // openaiProvider 实现 OpenAI（及兼容端点）的流式对话（R8、R10）。
@@ -29,15 +30,30 @@ type openaiChunk struct {
 	Choices []struct {
 		Index int `json:"index"`
 		Delta struct {
-			Role    string `json:"role"`
-			Content string `json:"content"`
+			Role      string `json:"role"`
+			Content   string `json:"content"`
+			ToolCalls []struct {
+				Index    int    `json:"index"`
+				ID       string `json:"id"`
+				Function struct {
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"function"`
+			} `json:"tool_calls"`
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
 }
 
-// Stream 发起一次 OpenAI 流式对话（R8）。thinking 配置被忽略（R10）。
-func (o *openaiProvider) Stream(ctx context.Context, system string, msgs []message.Message) <-chan StreamEvent {
+// toolAccum 累积一个流式 tool_call 的分片。
+type toolAccum struct {
+	id   string
+	name string
+	args strings.Builder
+}
+
+// Stream 发起一次 OpenAI 流式对话（R8、R15）。thinking 配置被忽略（R10）。
+func (o *openaiProvider) Stream(ctx context.Context, system string, tools []tool.Definition, msgs []message.Message) <-chan StreamEvent {
 	ch := make(chan StreamEvent, 16)
 	go func() {
 		defer close(ch)
@@ -49,8 +65,8 @@ func (o *openaiProvider) Stream(ctx context.Context, system string, msgs []messa
 			}
 		}
 
-		// 构建请求体，包含 system + 历史消息。
-		body, err := message.Normalize(o.profile, system, msgs)
+		// 构建请求体，包含 system + 工具 + 历史消息。
+		body, err := message.Normalize(o.profile, system, tools, msgs)
 		if err != nil {
 			send(StreamEvent{Type: EventError, Err: err})
 			return
@@ -86,16 +102,49 @@ func (o *openaiProvider) Stream(ctx context.Context, system string, msgs []messa
 		}
 
 		done := false
+		toolAcc := map[int]*toolAccum{}
+		var toolOrder []int
+		flushTools := func() {
+			for _, idx := range toolOrder {
+				ta := toolAcc[idx]
+				send(StreamEvent{Type: EventToolCall, ToolCall: parseToolCall(ta.id, ta.name, ta.args.String())})
+			}
+			toolAcc = map[int]*toolAccum{}
+			toolOrder = nil
+		}
 		rerr := readSSE(resp.Body, func(ev sseEvent) error {
 			if ev.Data == "[DONE]" {
+				flushTools()
 				done = true
 				send(StreamEvent{Type: EventDone})
 				return io.EOF // 正常结束
 			}
 			var chunk openaiChunk
 			_ = json.Unmarshal([]byte(ev.Data), &chunk)
-			if len(chunk.Choices) > 0 && chunk.Choices[0].Delta.Content != "" {
-				send(StreamEvent{Type: EventText, Text: chunk.Choices[0].Delta.Content})
+			if len(chunk.Choices) == 0 {
+				return nil
+			}
+			c := chunk.Choices[0]
+			if c.Delta.Content != "" {
+				send(StreamEvent{Type: EventText, Text: c.Delta.Content})
+			}
+			for _, tc := range c.Delta.ToolCalls {
+				acc := toolAcc[tc.Index]
+				if acc == nil {
+					acc = &toolAccum{}
+					toolAcc[tc.Index] = acc
+					toolOrder = append(toolOrder, tc.Index)
+				}
+				if tc.ID != "" {
+					acc.id = tc.ID
+				}
+				if tc.Function.Name != "" {
+					acc.name = tc.Function.Name
+				}
+				acc.args.WriteString(tc.Function.Arguments)
+			}
+			if c.FinishReason == "tool_calls" {
+				flushTools()
 			}
 			return nil
 		})

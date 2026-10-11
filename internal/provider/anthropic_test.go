@@ -60,7 +60,7 @@ func TestAnthropicStreamTextAndThinking(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	evs := drain(p.Stream(context.Background(), "sys", []message.Message{message.NewMessage(message.RoleUser, "hi")}))
+	evs := drain(p.Stream(context.Background(), "sys", nil, []message.Message{message.NewMessage(message.RoleUser, "hi")}))
 
 	if !strings.Contains(gotBody, `"stream":true`) {
 		t.Errorf("request body missing stream:true: %s", gotBody)
@@ -114,7 +114,7 @@ func TestAnthropicStreamErrorEvent(t *testing.T) {
 	defer srv.Close()
 
 	p, _ := newAnthropic(anthropicProfile(srv.URL))
-	evs := drain(p.Stream(context.Background(), "sys", nil))
+	evs := drain(p.Stream(context.Background(), "sys", nil, nil))
 
 	hasErr, hasDone := false, false
 	for _, ev := range evs {
@@ -144,7 +144,7 @@ func TestAnthropicStreamHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	p, _ := newAnthropic(anthropicProfile(srv.URL))
-	evs := drain(p.Stream(context.Background(), "sys", nil))
+	evs := drain(p.Stream(context.Background(), "sys", nil, nil))
 	if len(evs) != 1 || evs[0].Type != EventError {
 		t.Fatalf("evs = %+v", evs)
 	}
@@ -167,7 +167,7 @@ func TestAnthropicStreamCancel(t *testing.T) {
 
 	ctx, cancel := context.WithCancel(context.Background())
 	p, _ := newAnthropic(anthropicProfile(srv.URL))
-	ch := p.Stream(ctx, "sys", nil)
+	ch := p.Stream(ctx, "sys", nil, nil)
 
 	// 读到一个事件后取消。
 	select {

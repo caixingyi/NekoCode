@@ -16,7 +16,7 @@ func TestNormalizeAnthropicBasic(t *testing.T) {
 		NewMessage(RoleUser, "你好"),
 		NewMessage(RoleAssistant, "你好呀"),
 	}
-	reqAny, err := Normalize(p, "你是助手", msgs)
+	reqAny, err := Normalize(p, "你是助手", nil, msgs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -47,7 +47,7 @@ func TestNormalizeAnthropicThinkingConfig(t *testing.T) {
 	p.Thinking = &config.ThinkingConfig{Enabled: true, BudgetTokens: 2048}
 	temp := 0.5
 	p.Temperature = &temp
-	reqAny, _ := Normalize(p, "sys", []Message{NewMessage(RoleUser, "q")})
+	reqAny, _ := Normalize(p, "sys", nil, []Message{NewMessage(RoleUser, "q")})
 	req := reqAny.(*anthropicRequest)
 	if req.Thinking == nil || req.Thinking.Type != "enabled" || req.Thinking.BudgetTokens != 2048 {
 		t.Errorf("Thinking = %+v", req.Thinking)
@@ -62,7 +62,7 @@ func TestNormalizeAnthropicThinkingHistory(t *testing.T) {
 	msgs := []Message{
 		{Role: RoleAssistant, Content: "ans", Thinking: "thought", Signature: "sig"},
 	}
-	reqAny, _ := Normalize(p, "sys", msgs)
+	reqAny, _ := Normalize(p, "sys", nil, msgs)
 	req := reqAny.(*anthropicRequest)
 	blocks := req.Messages[0].Content
 	if len(blocks) != 2 {
@@ -79,7 +79,7 @@ func TestNormalizeAnthropicThinkingHistory(t *testing.T) {
 func TestNormalizeAnthropicThinkingWithoutSignatureDropped(t *testing.T) {
 	p := prof(config.ProtocolAnthropic)
 	msgs := []Message{{Role: RoleAssistant, Content: "ans", Thinking: "thought"}} // 无 signature
-	reqAny, _ := Normalize(p, "sys", msgs)
+	reqAny, _ := Normalize(p, "sys", nil, msgs)
 	req := reqAny.(*anthropicRequest)
 	blocks := req.Messages[0].Content
 	if len(blocks) != 1 || blocks[0].Type != "text" {
@@ -93,7 +93,7 @@ func TestNormalizeAnthropicSummaryMergedIntoSystem(t *testing.T) {
 		{Role: RoleSystem, Content: "之前的对话摘要", IsSummary: true},
 		NewMessage(RoleUser, "继续"),
 	}
-	reqAny, _ := Normalize(p, "身份", msgs)
+	reqAny, _ := Normalize(p, "身份", nil, msgs)
 	req := reqAny.(*anthropicRequest)
 	if req.System != "身份\n\n之前的对话摘要" {
 		t.Errorf("System = %q", req.System)
@@ -109,7 +109,7 @@ func TestNormalizeOpenAIBasic(t *testing.T) {
 		NewMessage(RoleUser, "你好"),
 		{Role: RoleAssistant, Content: "ans", Thinking: "t", Signature: "s"},
 	}
-	reqAny, err := Normalize(p, "你是助手", msgs)
+	reqAny, err := Normalize(p, "你是助手", nil, msgs)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -129,7 +129,7 @@ func TestNormalizeOpenAIBasic(t *testing.T) {
 func TestNormalizeOpenAIIgnoresThinking(t *testing.T) {
 	p := prof(config.ProtocolOpenAI)
 	p.Thinking = &config.ThinkingConfig{Enabled: true, BudgetTokens: 2048}
-	reqAny, _ := Normalize(p, "sys", []Message{NewMessage(RoleUser, "q")})
+	reqAny, _ := Normalize(p, "sys", nil, []Message{NewMessage(RoleUser, "q")})
 	req := reqAny.(*openaiRequest)
 	// openaiRequest 没有 thinking 字段，此处仅验证不报错且请求正常。
 	if req.Model != "m" {
@@ -143,7 +143,7 @@ func TestNormalizeOpenAISummaryKeptAsSystem(t *testing.T) {
 		{Role: RoleSystem, Content: "摘要", IsSummary: true},
 		NewMessage(RoleUser, "q"),
 	}
-	reqAny, _ := Normalize(p, "身份", msgs)
+	reqAny, _ := Normalize(p, "身份", nil, msgs)
 	req := reqAny.(*openaiRequest)
 	if len(req.Messages) != 3 {
 		t.Fatalf("len(Messages) = %d, want 3", len(req.Messages))
@@ -161,7 +161,7 @@ func TestNormalizeOpenAISummaryKeptAsSystem(t *testing.T) {
 
 func TestNormalizeUnknownProtocol(t *testing.T) {
 	p := prof("gemini")
-	if _, err := Normalize(p, "sys", nil); err == nil {
+	if _, err := Normalize(p, "sys", nil, nil); err == nil {
 		t.Fatal("expected error for unknown protocol")
 	}
 }
@@ -170,7 +170,7 @@ func TestNormalizeAnthropicTemperaturePassthrough(t *testing.T) {
 	p := prof(config.ProtocolAnthropic)
 	temp := 0.7
 	p.Temperature = &temp
-	reqAny, _ := Normalize(p, "sys", []Message{NewMessage(RoleUser, "q")})
+	reqAny, _ := Normalize(p, "sys", nil, []Message{NewMessage(RoleUser, "q")})
 	req := reqAny.(*anthropicRequest)
 	if req.Temperature == nil || *req.Temperature != 0.7 {
 		t.Errorf("Temperature = %v, want 0.7", req.Temperature)

@@ -52,7 +52,7 @@ func TestIntegrationAnthropicStreamReconstruct(t *testing.T) {
 	cfg := &config.Config{Profiles: map[string]config.Profile{
 		"claude": {Protocol: config.ProtocolAnthropic, Model: "m", APIKey: "k", BaseURL: srv.URL},
 	}}
-	m, err := New(cfg, "claude", session.NewStore(t.TempDir()))
+	m, err := New(cfg, "claude", session.NewStore(t.TempDir()), nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -87,7 +87,7 @@ func TestIntegrationOpenAIStreamReconstruct(t *testing.T) {
 	cfg := &config.Config{Profiles: map[string]config.Profile{
 		"openai": {Protocol: config.ProtocolOpenAI, Model: "m", APIKey: "k", BaseURL: srv.URL},
 	}}
-	m, _ := New(cfg, "openai", session.NewStore(t.TempDir()))
+	m, _ := New(cfg, "openai", session.NewStore(t.TempDir()), nil)
 	m.width = 80
 	m.sess.Messages = []message.Message{message.NewMessage(message.RoleUser, "hi")}
 	m.startStream()
@@ -115,7 +115,7 @@ func TestIntegrationStreamErrorKeepsPartial(t *testing.T) {
 	cfg := &config.Config{Profiles: map[string]config.Profile{
 		"claude": {Protocol: config.ProtocolAnthropic, Model: "m", APIKey: "k", BaseURL: srv.URL},
 	}}
-	m, _ := New(cfg, "claude", session.NewStore(t.TempDir()))
+	m, _ := New(cfg, "claude", session.NewStore(t.TempDir()), nil)
 	m.width = 80
 	m.sess.Messages = []message.Message{message.NewMessage(message.RoleUser, "hi")}
 	m.startStream()
@@ -133,7 +133,7 @@ func TestAutoSummarizeTrigger(t *testing.T) {
 	cfg := &config.Config{Profiles: map[string]config.Profile{
 		"claude": {Protocol: config.ProtocolAnthropic, Model: "claude-x", APIKey: "k", ContextWindow: 100},
 	}}
-	m, _ := New(cfg, "claude", session.NewStore(t.TempDir()))
+	m, _ := New(cfg, "claude", session.NewStore(t.TempDir()), nil)
 	m.width = 80
 	for i := 0; i < 20; i++ {
 		m.sess.Messages = append(m.sess.Messages, message.Message{Role: message.RoleUser, Content: strings.Repeat("x", 20)})
