@@ -97,9 +97,42 @@ func (a *anthropicProvider) Stream(ctx context.Context, system string, tools []t
 		}
 
 		blocks := map[int]*blockState{}
+		// token 用量：input 在 message_start，output 在 message_delta（累计值）。
+		var usage Usage
+		var gotUsage bool
+		var stopReason string
 		rerr := readSSE(resp.Body, func(ev sseEvent) error {
 			data := []byte(ev.Data)
 			switch ev.Event {
+			case "message_start":
+				var e struct {
+					Message struct {
+						Usage struct {
+							InputTokens  int `json:"input_tokens"`
+							OutputTokens int `json:"output_tokens"`
+						} `json:"usage"`
+					} `json:"message"`
+				}
+				_ = json.Unmarshal(data, &e)
+				usage.InputTokens = e.Message.Usage.InputTokens
+				usage.OutputTokens = e.Message.Usage.OutputTokens
+				gotUsage = true
+			case "message_delta":
+				var e struct {
+					Delta struct {
+						StopReason string `json:"stop_reason"`
+					} `json:"delta"`
+					Usage struct {
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
+				}
+				_ = json.Unmarshal(data, &e)
+				if e.Delta.StopReason != "" {
+					stopReason = e.Delta.StopReason
+				}
+				if e.Usage.OutputTokens > 0 {
+					usage.OutputTokens = e.Usage.OutputTokens
+				}
 			case "content_block_start":
 				var e struct {
 					Index        int `json:"index"`
@@ -157,7 +190,12 @@ func (a *anthropicProvider) Stream(ctx context.Context, system string, tools []t
 					send(StreamEvent{Type: EventToolCall, ToolCall: parseToolCall(b.toolID, b.toolName, b.toolJSON.String())})
 				}
 			case "message_stop":
-				send(StreamEvent{Type: EventDone})
+				done := StreamEvent{Type: EventDone, StopReason: normalizeAnthropicStop(stopReason)}
+				if gotUsage {
+					u := usage
+					done.Usage = &u
+				}
+				send(done)
 				return io.EOF // 正常结束，停止 readSSE
 			case "error":
 				var e struct {

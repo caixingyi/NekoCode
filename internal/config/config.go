@@ -53,6 +53,18 @@ type Profile struct {
 	Temperature   *float64        `yaml:"temperature,omitempty"`
 	SystemPrompt  string          `yaml:"system_prompt,omitempty"`
 	Thinking      *ThinkingConfig `yaml:"thinking,omitempty"`
+	// StreamUsage 控制 OpenAI 协议是否在请求里索要 token 用量
+	// （stream_options.include_usage）。未设置时默认开启；部分兼容网关不支持
+	// 该字段会直接报错，此时可显式设为 false。
+	StreamUsage *bool `yaml:"stream_usage,omitempty"`
+}
+
+// EffectiveStreamUsage 返回流式请求是否索要 token 用量，未设置时默认开启（R25）。
+func (p Profile) EffectiveStreamUsage() bool {
+	if p.StreamUsage != nil {
+		return *p.StreamUsage
+	}
+	return true
 }
 
 // EffectiveBaseURL 返回 base_url，为空时按 protocol 返回默认值。

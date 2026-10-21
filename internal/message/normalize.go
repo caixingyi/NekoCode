@@ -154,13 +154,19 @@ type openaiTool struct {
 	} `json:"function"`
 }
 
+// openaiStreamOptions 索要流式 token 用量（R25）。部分兼容网关不支持该字段。
+type openaiStreamOptions struct {
+	IncludeUsage bool `json:"include_usage"`
+}
+
 type openaiRequest struct {
-	Model       string          `json:"model"`
-	Messages    []openaiMessage `json:"messages"`
-	Tools       []openaiTool    `json:"tools,omitempty"`
-	Stream      bool            `json:"stream"`
-	MaxTokens   int             `json:"max_tokens,omitempty"`
-	Temperature *float64        `json:"temperature,omitempty"`
+	Model         string               `json:"model"`
+	Messages      []openaiMessage      `json:"messages"`
+	Tools         []openaiTool         `json:"tools,omitempty"`
+	Stream        bool                 `json:"stream"`
+	StreamOptions *openaiStreamOptions `json:"stream_options,omitempty"`
+	MaxTokens     int                  `json:"max_tokens,omitempty"`
+	Temperature   *float64             `json:"temperature,omitempty"`
 }
 
 func normalizeOpenAI(profile config.Profile, system string, tools []tool.Definition, msgs []Message) *openaiRequest {
@@ -194,6 +200,9 @@ func normalizeOpenAI(profile config.Profile, system string, tools []tool.Definit
 		Stream:      true,
 		MaxTokens:   profile.MaxTokens,
 		Temperature: profile.Temperature,
+	}
+	if profile.EffectiveStreamUsage() {
+		req.StreamOptions = &openaiStreamOptions{IncludeUsage: true}
 	}
 	for _, d := range tools {
 		var ot openaiTool
