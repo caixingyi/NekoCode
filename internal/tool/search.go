@@ -34,6 +34,7 @@ func (t findFiles) Description() string {
 	return "按 glob 模式（如 **/*.go）在工作目录下查找文件路径。"
 }
 func (t findFiles) NeedsConfirm() bool { return false }
+func (t findFiles) IsReadOnly() bool   { return true }
 func (t findFiles) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -103,6 +104,7 @@ func (t searchCode) Description() string {
 	return "用正则在工作目录的文件内容里搜索，返回 文件:行号:内容。"
 }
 func (t searchCode) NeedsConfirm() bool { return false }
+func (t searchCode) IsReadOnly() bool   { return true }
 func (t searchCode) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",

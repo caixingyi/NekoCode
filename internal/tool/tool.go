@@ -30,6 +30,7 @@ type Tool interface {
 	Description() string
 	Schema() map[string]any // JSON Schema：{"type":"object","properties":{...},"required":[...]}
 	NeedsConfirm() bool     // 有副作用的工具（write/edit/bash）返回 true
+	IsReadOnly() bool       // 只读工具返回 true，供 agent 分组并发执行（R26）
 	Execute(ctx context.Context, args map[string]any) Result
 }
 
@@ -71,6 +72,7 @@ func (r *Registry) Definitions() []Definition {
 }
 
 // Execute 按名执行工具，套用默认超时；工具不存在返回结构化错误。
+// 工具内部的 panic 被 recover 成结构化错误（R12），不会炸掉进程。
 func (r *Registry) Execute(ctx context.Context, name string, args map[string]any) Result {
 	t, found := r.Get(name)
 	if !found {
@@ -79,12 +81,24 @@ func (r *Registry) Execute(ctx context.Context, name string, args map[string]any
 	cctx, cancel := context.WithTimeout(ctx, defaultTimeout)
 	defer cancel()
 
+	// done 带缓冲，超时后执行 goroutine 仍能发送并退出，不会泄漏。
 	done := make(chan Result, 1)
-	go func() { done <- t.Execute(cctx, args) }()
+	go func() {
+		defer func() {
+			if rec := recover(); rec != nil {
+				done <- fail("工具 %s 内部错误: %v", name, rec)
+			}
+		}()
+		done <- t.Execute(cctx, args)
+	}()
 	select {
 	case res := <-done:
 		return res
 	case <-cctx.Done():
+		// 区分「外部取消」与「超时」：前者是用户打断（R9），后者是工具跑太久。
+		if ctx.Err() != nil {
+			return fail("工具 %s 被取消", name)
+		}
 		return fail("工具 %s 执行超时（%s）", name, defaultTimeout)
 	}
 }
