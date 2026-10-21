@@ -1,7 +1,9 @@
 package tui
 
 import (
+	"fmt"
 	"strings"
+	"time"
 
 	tea "charm.land/bubbletea/v2"
 	"charm.land/lipgloss/v2"
@@ -23,6 +25,7 @@ var (
 	toolStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("214"))
 	toolResStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("108"))
 	confirmStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("214")).Bold(true)
+	planStyle      = lipgloss.NewStyle().Foreground(lipgloss.Color("81")).Bold(true)
 )
 
 // View 实现 tea.Model（MVU 中的 View，纯函数渲染）。
@@ -47,8 +50,8 @@ func (m *Model) View() tea.View {
 			}
 		}
 
-		// 流式中的回复（含 thinking 区块）。
-		if m.streaming && (m.streamBuf != "" || m.thinkBuf != "") {
+		// 当前轮正在流式生成的内容；已完成的部分由上面的历史快照渲染。
+		if m.running && (m.streamBuf != "" || m.thinkBuf != "") {
 			if m.thinkBuf != "" {
 				b.WriteString(thinkingStyle.Render("💭 " + m.thinkBuf))
 				b.WriteString("\n")
@@ -61,15 +64,18 @@ func (m *Model) View() tea.View {
 	}
 
 	// 工具确认提示。
-	if m.confirming != nil {
-		b.WriteString(toolStyle.Render("🔧 " + m.confirming.Name))
+	if m.confirm != nil {
+		b.WriteString(toolStyle.Render("🔧 " + m.confirm.call.Name))
 		b.WriteString("\n")
-		b.WriteString(m.confirmText)
+		b.WriteString(m.confirm.preview)
 		b.WriteString("\n")
 		b.WriteString(confirmStyle.Render("执行？ [y] 允许  [n] 拒绝  [a] 本会话全部允许"))
 		b.WriteString("\n")
-	} else if m.toolExecuting {
-		b.WriteString(faintStyle.Render("⏳ 正在执行工具..."))
+	} else if m.executing > 0 {
+		b.WriteString(faintStyle.Render(fmt.Sprintf("⏳ 正在执行 %d 个工具...", m.executing)))
+		b.WriteString("\n")
+	} else if m.running {
+		b.WriteString(faintStyle.Render("⏳ 生成中..."))
 		b.WriteString("\n")
 	}
 
@@ -106,8 +112,8 @@ func (m *Model) welcome() string {
 		faintStyle.Render("开始:"),
 		"  • 输入问题，Enter 发送",
 		"  • /help 查看命令 · /switch 换模型",
-		"  • /think 开启思考(Claude) · /resume 恢复会话",
-		"  • Ctrl+J 换行 · Ctrl+C 退出",
+		"  • /think 开启思考(Claude) · /plan 计划模式",
+		"  • Ctrl+J 换行 · Esc/Ctrl+C 取消 · Ctrl+C 退出",
 	}
 	right := strings.Join(rightLines, "\n")
 
@@ -115,10 +121,33 @@ func (m *Model) welcome() string {
 	return banner + "\n" + strings.Repeat("─", max(m.width-2, 20)) + "\n\n"
 }
 
-// header 渲染对话中的紧凑顶栏。
+// header 渲染对话中的紧凑顶栏，并在循环进行时显示进度信息（R3）。
 func (m *Model) header() string {
-	return titleStyle.Render("NekoCode") + " " + m.profileName + "/" + m.profile.Model +
-		"  " + faintStyle.Render("/help · Ctrl+C 退出")
+	var b strings.Builder
+	b.WriteString(titleStyle.Render("NekoCode"))
+	b.WriteString(" ")
+	b.WriteString(m.profileName)
+	b.WriteString("/")
+	b.WriteString(m.profile.Model)
+	if m.sess.PlanMode {
+		b.WriteString("  ")
+		b.WriteString(planStyle.Render("[PLAN]"))
+	}
+	if m.running && m.turn > 0 {
+		b.WriteString("  ")
+		b.WriteString(faintStyle.Render(fmt.Sprintf("第 %d 轮", m.turn)))
+	}
+	if m.lastExec > 0 {
+		b.WriteString("  ")
+		b.WriteString(faintStyle.Render(fmt.Sprintf("%s %s", m.lastTool, m.lastExec.Round(time.Millisecond))))
+	}
+	if u := m.totalUsage; u.InputTokens+u.OutputTokens > 0 {
+		b.WriteString("  ")
+		b.WriteString(faintStyle.Render(fmt.Sprintf("↑%d ↓%d tok", u.InputTokens, u.OutputTokens)))
+	}
+	b.WriteString("  ")
+	b.WriteString(faintStyle.Render("/help · Esc 取消 · Ctrl+C 退出"))
+	return b.String()
 }
 
 func renderMessage(msg message.Message, width int) string {
@@ -177,4 +206,13 @@ func argsSummary(input map[string]any) string {
 		return p
 	}
 	return ""
+}
+
+// oneLine 把多行文本压成单行并截断，用于工具结果摘要。
+func oneLine(s string) string {
+	s = strings.ReplaceAll(s, "\n", "⏎")
+	if len([]rune(s)) > 80 {
+		s = string([]rune(s)[:80]) + "…"
+	}
+	return s
 }

@@ -6,9 +6,8 @@ import (
 
 	tea "charm.land/bubbletea/v2"
 
+	"nekocode/internal/agent"
 	aictx "nekocode/internal/context"
-	"nekocode/internal/message"
-	"nekocode/internal/provider"
 )
 
 // Update 实现 tea.Model（MVU 中的 Update）。
@@ -19,58 +18,80 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.input.SetWidth(max(m.width-2, 10))
 		return m, nil
 
-	case streamEventMsg:
-		return m.handleStreamEvent(provider.StreamEvent(msg))
+	case agentEventMsg:
+		return m.handleAgentEvent(agent.Event(msg))
 
-	case streamClosedMsg:
-		if !m.inSecondStream && len(m.pendingCalls) > 0 {
-			return m, m.beginToolRound()
-		}
-		m.finalizeStream()
+	case agentClosedMsg:
+		m.finishRun()
 		return m, nil
 
-	case toolResultMsg:
-		return m.onToolResult(msg)
+	case confirmRequestMsg:
+		req := msg
+		m.confirm = &req
+		return m, nil
 
 	case compactDoneMsg:
 		return m.handleCompactDone(msg)
 
 	case tea.KeyPressMsg:
-		if m.quitting {
-			return m, nil
-		}
-		ks := msg.String()
-		// 确认态：只认 y/n/a（esc/ctrl+c 视为拒绝当前）。
-		if m.confirming != nil {
-			switch ks {
-			case "y":
-				return m.confirmResponse('y')
-			case "a":
-				return m.confirmResponse('a')
-			case "n", "esc", "ctrl+c":
-				return m.confirmResponse('n')
-			}
-			return m, nil
-		}
-		switch ks {
-		case "ctrl+c":
-			if m.streaming && m.cancel != nil {
-				m.cancel()
-				return m, nil
-			}
-			m.quitting = true
-			return m, tea.Quit
-		case "enter":
-			if !m.busy() {
-				return m.handleSubmit()
-			}
-			return m, nil
-		}
-		if m.busy() {
-			return m, nil // 流式/工具执行中不接受输入
-		}
+		return m.handleKey(msg)
 	}
 
+	var cmd tea.Cmd
+	m.input, cmd = m.input.Update(msg)
+	return m, cmd
+}
+
+// handleKey 处理按键：确认态只认 y/n/a（Esc 拒绝当前），循环中 Esc/Ctrl+C 取消整个循环。
+func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
+	if m.quitting {
+		return m, nil
+	}
+	ks := msg.String()
+
+	if m.confirm != nil {
+		switch ks {
+		case "y":
+			return m, m.answerConfirm(agent.DecisionAllow)
+		case "a":
+			return m, m.answerConfirm(agent.DecisionAllowAll)
+		case "n", "esc":
+			// R19：拒绝当前工具，不放整个循环。
+			return m, m.answerConfirm(agent.DecisionDeny)
+		case "ctrl+c":
+			// Ctrl+C 始终是「打断整个循环」，确认态也不例外。
+			m.notice = "正在取消..."
+			m.cancelRun()
+			return m, nil
+		}
+		return m, nil
+	}
+
+	switch ks {
+	case "ctrl+c":
+		if m.running {
+			m.notice = "正在取消..."
+			m.cancelRun()
+			return m, nil
+		}
+		m.quitting = true
+		return m, tea.Quit
+	case "esc":
+		if m.running {
+			m.notice = "正在取消..."
+			m.cancelRun()
+		}
+		return m, nil
+	case "enter":
+		if !m.busy() {
+			return m.handleSubmit()
+		}
+		return m, nil
+	}
+
+	if m.busy() {
+		return m, nil // 循环进行中不接受输入
+	}
 	var cmd tea.Cmd
 	m.input, cmd = m.input.Update(msg)
 	return m, cmd
@@ -87,12 +108,17 @@ func (m *Model) handleCompactDone(msg compactDoneMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.pendingSend {
 		m.pendingSend = false
-		return m, m.startStream()
+		text := m.pendingText
+		m.pendingText = ""
+		return m, m.startRun(text)
 	}
 	return m, nil
 }
 
-// handleSubmit 处理 Enter 提交：加入用户消息、必要时自动压缩、发起流式。
+// handleSubmit 处理 Enter 提交：必要时先自动压缩，然后发起一次循环。
+//
+// 用户消息由 agent 追加进历史并通过快照回带，这里不再自己拼消息——
+// agent 是会话历史的唯一真相源。
 func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	text := strings.TrimSpace(m.input.Value())
 	if text == "" {
@@ -104,13 +130,13 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	m.input.Reset()
 	m.errMsg = ""
 	m.notice = ""
-	m.sess.Messages = append(m.sess.Messages, message.NewMessage(message.RoleUser, text))
 
-	// R23：达到阈值先自动压缩再发送。
+	// R21：达到阈值先自动压缩再发送（循环内部不做压缩）。
 	if aictx.ShouldSummarize(m.profile, m.sess.Messages) {
 		m.pendingSend = true
+		m.pendingText = text
 		m.notice = "上下文接近上限，正在自动压缩..."
 		return m, m.startCompact()
 	}
-	return m, m.startStream()
+	return m, m.startRun(text)
 }

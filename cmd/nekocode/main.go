@@ -26,7 +26,8 @@ flags:
   --help, -h         打印帮助并退出
 
 交互中:
-  Enter 发送 · Ctrl+J 换行 · Ctrl+C 中断/退出 · /help 查看命令
+  Enter 发送 · Ctrl+J 换行 · Esc/Ctrl+C 取消循环 · Ctrl+C 空闲时退出
+  /help 查看全部命令（含 /plan 计划模式）
 
 配置:
   全局: ~/.nekocode/config.yaml
@@ -94,6 +95,8 @@ func main() {
 	}
 
 	p := tea.NewProgram(m)
+	// 把 Program 交给 Model，agent 的确认请求才能投回 UI 事件循环（R13）。
+	m.SetProgram(p)
 	if _, err := p.Run(); err != nil {
 		fmt.Fprintln(os.Stderr, "运行失败:", err)
 		os.Exit(1)

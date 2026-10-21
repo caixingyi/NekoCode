@@ -36,6 +36,8 @@ type Session struct {
 	ProfileHistory []ProfileSwitch   `json:"profile_history"`
 	Messages       []message.Message `json:"messages"`
 	EstTokens      int               `json:"est_tokens"`
+	// PlanMode 是会话级的计划模式开关（R14），随会话落盘，/resume 一并恢复。
+	PlanMode bool `json:"plan_mode,omitempty"`
 }
 
 // Store 管理 ~/.nekocode/sessions/ 下的会话文件。

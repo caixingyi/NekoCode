@@ -1,16 +1,21 @@
 // Package tui 实现基于 bubbletea v2 的交互式终端界面：
 // 状态模型、事件处理、流式渲染、thinking 区块与 slash 命令。
+//
+// 从 step 3 起，循环本体搬到了 internal/agent，本包退化为事件消费者：
+// 负责渲染事件、把用户按键转成确认决定、以及把 agent 回带的历史快照落盘。
 package tui
 
 import (
 	"context"
+	"sync/atomic"
+	"time"
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
 	tea "charm.land/bubbletea/v2"
 
+	"nekocode/internal/agent"
 	"nekocode/internal/config"
-	"nekocode/internal/message"
 	"nekocode/internal/provider"
 	"nekocode/internal/session"
 	"nekocode/internal/tool"
@@ -28,24 +33,40 @@ type Model struct {
 	profileName string
 	sess        *session.Session
 
-	input       textarea.Model
-	streamBuf   string // 正在流式生成的回复文本
-	thinkBuf    string // 正在流式生成的思考文本
-	signature   string // 当前轮 thinking 签名
-	streaming   bool
-	pendingSend bool // 自动摘要后是否要继续发送
-	streamCh    <-chan provider.StreamEvent
-	cancel      context.CancelFunc
+	input textarea.Model
 
-	// 工具单轮编排状态。
-	pendingCalls   []message.ToolCall   // 本次 stream 收集到的工具调用
-	confirmQueue   []message.ToolCall   // 待确认/执行的工具
-	confirming     *message.ToolCall    // 正在等 y/n/a 的工具
-	confirmText    string               // 确认预览文本
-	toolResults    []message.ToolResult // 本轮累积结果
-	toolExecuting  bool                 // 有工具执行中
-	inSecondStream bool                 // 是否处于工具后的第二次 stream（此时 tool_use 不再执行）
-	allowAll       bool                 // 本会话「全部允许」
+	// 一次循环（agent.Run）的状态。
+	eventCh <-chan agent.Event
+	cancel  context.CancelFunc
+	running bool
+	// waiting 保证同一时刻只有一个 goroutine 在读事件 channel。
+	waiting bool
+	turn    int
+
+	streamBuf string // 当前轮正在流式生成的回复文本
+	thinkBuf  string // 当前轮正在流式生成的思考文本
+	signature string
+
+	executing int // 正在执行的工具数（并发读可能大于 1）
+
+	// 确认：agent 通过 sender 发来的待确认请求。
+	confirm *confirmRequestMsg
+	// allowAll 是「本会话全部允许」开关。由确认器跨 goroutine 读，
+	// 因此用 atomic；一旦打开，后续写操作不再询问（R13）。
+	allowAll atomic.Bool
+
+	// 统计与状态展示。
+	turnUsage  provider.Usage
+	totalUsage provider.Usage
+	lastTool   string
+	lastExec   time.Duration
+	blocksSeen int // 本轮被 plan 模式拦截的次数
+
+	stopReason agent.StopReason
+	sender     sender
+
+	pendingSend bool   // 自动摘要后是否要继续发送
+	pendingText string // 待发送的输入
 
 	errMsg   string
 	notice   string
@@ -84,6 +105,12 @@ func New(cfg *config.Config, profileName string, store *session.Store, registry 
 		sess:        session.NewSession(profileName),
 		input:       ta,
 	}, nil
+}
+
+// SetProgram 注入 bubbletea Program，用于把确认请求投回 UI 事件循环。
+// main 在 tea.NewProgram 之后、Run 之前调用；不调用时写类工具按安全默认拒绝。
+func (m *Model) SetProgram(p *tea.Program) {
+	m.sender = programSender{p: p}
 }
 
 // Init 实现 tea.Model。
