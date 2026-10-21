@@ -27,16 +27,63 @@ const (
 	EventError
 )
 
+// 归一化后的停止原因（R24）：两家的取值统一到这三个，供 agent 判定如何收场。
+const (
+	// StopEndTurn 表示模型正常结束（Anthropic end_turn/stop_sequence、OpenAI stop 等）。
+	StopEndTurn = "end_turn"
+	// StopToolUse 表示模型请求调用工具（Anthropic tool_use、OpenAI tool_calls）。
+	StopToolUse = "tool_use"
+	// StopMaxTokens 表示输出被长度截断（Anthropic max_tokens、OpenAI length）。
+	StopMaxTokens = "max_tokens"
+)
+
+// Usage 是一次模型调用的 token 用量（R25）。
+type Usage struct {
+	InputTokens  int
+	OutputTokens int
+}
+
 // StreamEvent 是 Provider 流式输出的统一事件。
 //
 // 对于 EventThinking：Text 为思考文本增量；thinking block 结束时发一条 Text 空、
 // Signature 非空的事件。EventToolCall 时 ToolCall 携带完整调用（含拼接好的参数）。
+// StopReason 与 Usage 随 EventDone 给出，服务端未返回时分别为空串与 nil。
 type StreamEvent struct {
-	Type      EventType
-	Text      string
-	Err       error
-	Signature string
-	ToolCall  message.ToolCall
+	Type       EventType
+	Text       string
+	Err        error
+	Signature  string
+	ToolCall   message.ToolCall
+	StopReason string
+	Usage      *Usage
+}
+
+// normalizeAnthropicStop 把 Anthropic 的 stop_reason 归一化为统一取值。
+func normalizeAnthropicStop(r string) string {
+	switch r {
+	case "":
+		return ""
+	case StopMaxTokens:
+		return StopMaxTokens
+	case StopToolUse:
+		return StopToolUse
+	default: // end_turn / stop_sequence / 未知值
+		return StopEndTurn
+	}
+}
+
+// normalizeOpenAIStop 把 OpenAI 的 finish_reason 归一化为统一取值。
+func normalizeOpenAIStop(r string) string {
+	switch r {
+	case "":
+		return ""
+	case "length":
+		return StopMaxTokens
+	case "tool_calls", "function_call":
+		return StopToolUse
+	default: // stop / content_filter / 未知值
+		return StopEndTurn
+	}
 }
 
 // Provider 是 LLM 供应商的统一流式对话接口（R7）。

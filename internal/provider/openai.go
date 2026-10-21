@@ -43,6 +43,11 @@ type openaiChunk struct {
 		} `json:"delta"`
 		FinishReason string `json:"finish_reason"`
 	} `json:"choices"`
+	// Usage 只在 stream_options.include_usage 开启时出现，且位于 choices 为空的末条 chunk（R25）。
+	Usage *struct {
+		PromptTokens     int `json:"prompt_tokens"`
+		CompletionTokens int `json:"completion_tokens"`
+	} `json:"usage"`
 }
 
 // toolAccum 累积一个流式 tool_call 的分片。
@@ -104,6 +109,8 @@ func (o *openaiProvider) Stream(ctx context.Context, system string, tools []tool
 		done := false
 		toolAcc := map[int]*toolAccum{}
 		var toolOrder []int
+		var usage *Usage
+		var finishReason string
 		flushTools := func() {
 			for _, idx := range toolOrder {
 				ta := toolAcc[idx]
@@ -116,15 +123,22 @@ func (o *openaiProvider) Stream(ctx context.Context, system string, tools []tool
 			if ev.Data == "[DONE]" {
 				flushTools()
 				done = true
-				send(StreamEvent{Type: EventDone})
+				send(StreamEvent{Type: EventDone, StopReason: normalizeOpenAIStop(finishReason), Usage: usage})
 				return io.EOF // 正常结束
 			}
 			var chunk openaiChunk
 			_ = json.Unmarshal([]byte(ev.Data), &chunk)
+			// usage chunk 的 choices 为空，必须在 len(choices)==0 的提前返回之前取。
+			if chunk.Usage != nil {
+				usage = &Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}
+			}
 			if len(chunk.Choices) == 0 {
 				return nil
 			}
 			c := chunk.Choices[0]
+			if c.FinishReason != "" {
+				finishReason = c.FinishReason
+			}
 			if c.Delta.Content != "" {
 				send(StreamEvent{Type: EventText, Text: c.Delta.Content})
 			}
@@ -153,7 +167,8 @@ func (o *openaiProvider) Stream(ctx context.Context, system string, tools []tool
 			send(StreamEvent{Type: EventError, Err: rerr})
 		} else if rerr == nil && !done {
 			// 流自然结束但未收到 [DONE]，补发 EventDone。
-			send(StreamEvent{Type: EventDone})
+			flushTools()
+			send(StreamEvent{Type: EventDone, StopReason: normalizeOpenAIStop(finishReason), Usage: usage})
 		}
 	}()
 	return ch

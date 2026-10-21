@@ -29,7 +29,7 @@ func (m *Model) handleCommand(text string) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case "/help":
-		m.notice = "命令: /help /quit /clear /new /resume [n] /switch [profile] /think /compact"
+		m.notice = "命令: /help /quit /clear /new /resume [n] /switch [profile] /think /plan /compact"
 		return m, nil
 	case "/clear":
 		m.sess.Messages = nil
@@ -47,6 +47,8 @@ func (m *Model) handleCommand(text string) (tea.Model, tea.Cmd) {
 		return m.handleSwitch(arg)
 	case "/think":
 		return m.handleThink()
+	case "/plan":
+		return m.handlePlan()
 	case "/compact":
 		m.notice = "正在压缩..."
 		return m, m.startCompact()
@@ -113,6 +115,18 @@ func (m *Model) handleSwitch(arg string) (tea.Model, tea.Cmd) {
 	m.sess.RecordSwitch(arg)
 	m.saveSession()
 	m.notice = "已切换到 " + arg + "（历史已携带）"
+	return m, nil
+}
+
+// handlePlan 切换计划模式（R14）。开关随会话落盘，/resume 一并恢复。
+func (m *Model) handlePlan() (tea.Model, tea.Cmd) {
+	m.sess.PlanMode = !m.sess.PlanMode
+	if m.sess.PlanMode {
+		m.notice = "已进入计划模式：只读工具可用，写类工具会被拦截；再输入 /plan 退出"
+	} else {
+		m.notice = "已退出计划模式，写操作恢复正常"
+	}
+	m.saveSession()
 	return m, nil
 }
 

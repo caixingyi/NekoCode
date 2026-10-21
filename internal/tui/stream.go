@@ -9,122 +9,13 @@ import (
 	aictx "nekocode/internal/context"
 	"nekocode/internal/message"
 	"nekocode/internal/provider"
-	"nekocode/internal/tool"
 )
-
-// streamEventMsg 包装一条 provider 流式事件。
-type streamEventMsg provider.StreamEvent
-
-// streamClosedMsg 表示 stream channel 已关闭。
-type streamClosedMsg struct{}
 
 // compactDoneMsg 是异步摘要压缩的结果。
 type compactDoneMsg struct {
 	msgs []message.Message
 	n    int
 	err  error
-}
-
-// waitForEvent 阻塞读取 stream channel 的下一个事件，作为 tea.Msg 返回。
-func waitForEvent(ch <-chan provider.StreamEvent) tea.Cmd {
-	return func() tea.Msg {
-		ev, ok := <-ch
-		if !ok {
-			return streamClosedMsg{}
-		}
-		return streamEventMsg(ev)
-	}
-}
-
-// startStream 发起一轮流式对话，返回首个等待命令。
-func (m *Model) startStream() tea.Cmd {
-	ctx, cancel := context.WithCancel(context.Background())
-	m.cancel = cancel
-	m.streaming = true
-	m.streamBuf = ""
-	m.thinkBuf = ""
-	m.signature = ""
-	m.errMsg = ""
-	m.notice = ""
-	m.pendingCalls = nil
-
-	prov, err := provider.New(m.profile)
-	if err != nil {
-		m.streaming = false
-		m.errMsg = "创建 provider 失败: " + err.Error()
-		return nil
-	}
-	var defs []tool.Definition
-	if m.registry != nil {
-		defs = m.registry.Definitions()
-	}
-	m.streamCh = prov.Stream(ctx, m.profile.EffectiveSystemPrompt(), defs, m.sess.Messages)
-	return waitForEvent(m.streamCh)
-}
-
-// handleStreamEvent 处理一条流式事件，返回下一个等待命令。
-func (m *Model) handleStreamEvent(ev provider.StreamEvent) (tea.Model, tea.Cmd) {
-	switch ev.Type {
-	case provider.EventText:
-		m.streamBuf += ev.Text
-		return m, waitForEvent(m.streamCh)
-	case provider.EventThinking:
-		if ev.Text != "" {
-			m.thinkBuf += ev.Text
-		}
-		if ev.Signature != "" {
-			m.signature = ev.Signature
-		}
-		return m, waitForEvent(m.streamCh)
-	case provider.EventToolCall:
-		// 第二次 stream 里的 tool_use 不执行（单轮上限，R16）。
-		if !m.inSecondStream {
-			m.pendingCalls = append(m.pendingCalls, ev.ToolCall)
-		}
-		return m, waitForEvent(m.streamCh)
-	case provider.EventDone:
-		return m.onStreamDone()
-	case provider.EventError:
-		m.errMsg = friendlyErr(ev.Err)
-		m.finalizeStream() // 保留已生成文本（R26）
-		return m, nil
-	}
-	return m, waitForEvent(m.streamCh)
-}
-
-// onStreamDone 在一次 stream 结束时决定：有工具调用则进入工具轮，否则收尾。
-func (m *Model) onStreamDone() (tea.Model, tea.Cmd) {
-	if len(m.pendingCalls) > 0 && !m.inSecondStream {
-		return m, m.beginToolRound()
-	}
-	if m.inSecondStream && len(m.pendingCalls) > 0 {
-		m.notice = "已达单轮工具上限（Agent Loop 见后续），本轮工具调用未执行"
-	}
-	m.finalizeStream()
-	return m, nil
-}
-
-// finalizeStream 结束一轮流式：把已生成文本落为 assistant 消息、落盘、清理状态。
-func (m *Model) finalizeStream() {
-	if !m.streaming {
-		return
-	}
-	if m.streamBuf != "" || m.thinkBuf != "" {
-		m.sess.Messages = append(m.sess.Messages, message.Message{
-			Role:      message.RoleAssistant,
-			Content:   m.streamBuf,
-			Thinking:  m.thinkBuf,
-			Signature: m.signature,
-		})
-	}
-	m.streaming = false
-	m.inSecondStream = false
-	m.streamBuf = ""
-	m.thinkBuf = ""
-	m.signature = ""
-	m.pendingCalls = nil
-	m.cancel = nil
-	m.saveSession() // R21：每轮结束自动落盘
 }
 
 // startCompact 异步触发摘要压缩（force=true），结果通过 compactDoneMsg 回传。

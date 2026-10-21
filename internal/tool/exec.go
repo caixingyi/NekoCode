@@ -23,6 +23,9 @@ func (t runCommand) Description() string {
 	return "在工作目录下用 sh -c 执行 shell 命令，返回合并的 stdout/stderr 与退出码。"
 }
 func (t runCommand) NeedsConfirm() bool { return true }
+
+// IsReadOnly 恒为 false：shell 命令既能 git status 也能 rm -rf，静态无法区分，按最坏情况归类。
+func (t runCommand) IsReadOnly() bool { return false }
 func (t runCommand) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",

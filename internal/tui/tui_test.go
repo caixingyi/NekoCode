@@ -51,7 +51,7 @@ func TestViewDoesNotPanic(t *testing.T) {
 		message.NewMessage(message.RoleUser, "你好"),
 		message.NewMessage(message.RoleAssistant, "你好呀"),
 	}
-	m.streaming = true
+	m.running = true
 	m.streamBuf = "生成中"
 	m.thinkBuf = "思考中"
 	_ = m.View() // 不 panic 即可
