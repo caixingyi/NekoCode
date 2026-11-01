@@ -31,12 +31,14 @@ type scriptedTurn struct {
 type fakeProvider struct {
 	turns []scriptedTurn
 
-	mu   sync.Mutex
-	n    int
-	seen [][]message.Message
+	mu      sync.Mutex
+	n       int
+	seen    [][]message.Message
+	systems []string
+	defs    [][]tool.Definition
 }
 
-func (f *fakeProvider) Stream(_ context.Context, _ string, _ []tool.Definition, msgs []message.Message) <-chan provider.StreamEvent {
+func (f *fakeProvider) Stream(_ context.Context, system string, tools []tool.Definition, msgs []message.Message) <-chan provider.StreamEvent {
 	f.mu.Lock()
 	idx := f.n
 	f.n++
@@ -44,6 +46,8 @@ func (f *fakeProvider) Stream(_ context.Context, _ string, _ []tool.Definition, 
 		idx = len(f.turns) - 1
 	}
 	f.seen = append(f.seen, cloneMessages(msgs))
+	f.systems = append(f.systems, system)
+	f.defs = append(f.defs, append([]tool.Definition(nil), tools...))
 	f.mu.Unlock()
 
 	ch := make(chan provider.StreamEvent, 16)
@@ -85,6 +89,15 @@ func (f *fakeProvider) history(i int) []message.Message {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.seen[i]
+}
+
+func (f *fakeProvider) systemAt(i int) string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	if i < 0 || i >= len(f.systems) {
+		return ""
+	}
+	return f.systems[i]
 }
 
 // fakeTool 是可编程的工具替身，execCount 用原子计数（并发批次测试会用到）。
@@ -156,6 +169,18 @@ func countEvents(evs []Event, typ EventType) int {
 	return n
 }
 
+// conversationOnly 去掉系统补充消息，便于既有测试继续按真实对话断言。
+func conversationOnly(msgs []message.Message) []message.Message {
+	out := make([]message.Message, 0, len(msgs))
+	for _, m := range msgs {
+		if m.IsSupplement {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // assertPaired 断言历史里每个 tool_use 都有配对的 tool_result
 // （Anthropic 的硬约束，缺了下次请求会被拒）。
 func assertPaired(t *testing.T, msgs []message.Message) {
@@ -203,11 +228,12 @@ func TestLoopSingleTurnNoTools(t *testing.T) {
 	if done.Type != EventDone || done.StopReason != StopEndTurn {
 		t.Errorf("last event = %+v, want Done/end_turn", done)
 	}
-	if len(done.Messages) != 2 {
-		t.Fatalf("history = %d messages, want user+assistant", len(done.Messages))
+	history := conversationOnly(done.Messages)
+	if len(history) != 2 {
+		t.Fatalf("history = %d messages, want user+assistant", len(history))
 	}
-	if done.Messages[1].Content != "你好" {
-		t.Errorf("assistant content = %q", done.Messages[1].Content)
+	if history[1].Content != "你好" {
+		t.Errorf("assistant content = %q", history[1].Content)
 	}
 	assertPaired(t, done.Messages)
 }
@@ -237,7 +263,8 @@ func TestLoopMultiTurnWithTool(t *testing.T) {
 	}
 
 	// 第二次请求的历史里，tool_use 后面必须紧跟配对的 tool_result。
-	second := p.history(1)
+	// 忽略 env 补充消息，只看真实对话。
+	second := conversationOnly(p.history(1))
 	if len(second) != 3 {
 		t.Fatalf("second request history = %d messages, want user+assistant+results", len(second))
 	}
@@ -316,8 +343,8 @@ func TestLoopEmptyResponse(t *testing.T) {
 	if done.StopReason != StopEmptyResponse {
 		t.Errorf("StopReason = %q, want empty_response", done.StopReason)
 	}
-	if len(done.Messages) != 1 {
-		t.Errorf("empty assistant message should not be stored, history = %+v", done.Messages)
+	if history := conversationOnly(done.Messages); len(history) != 1 {
+		t.Errorf("empty assistant message should not be stored, history = %+v", history)
 	}
 }
 
