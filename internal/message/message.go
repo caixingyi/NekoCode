@@ -14,7 +14,6 @@ import (
 type Role string
 
 const (
-	RoleSystem    Role = "system"
 	RoleUser      Role = "user"
 	RoleAssistant Role = "assistant"
 )
@@ -35,14 +34,19 @@ type ToolResult struct {
 
 // Message 是 NekoCode 内部统一的对话消息模型。
 type Message struct {
-	Role        Role         `json:"role"`
-	Content     string       `json:"content"`
-	Thinking    string       `json:"thinking,omitempty"`
-	Signature   string       `json:"signature,omitempty"`
-	IsSummary   bool         `json:"is_summary,omitempty"`
-	ToolCalls   []ToolCall   `json:"tool_calls,omitempty"`   // assistant 发起
-	ToolResults []ToolResult `json:"tool_results,omitempty"` // user 回灌
-	CreatedAt   time.Time    `json:"created_at"`
+	Role      Role   `json:"role"`
+	Content   string `json:"content"`
+	Thinking  string `json:"thinking,omitempty"`
+	Signature string `json:"signature,omitempty"`
+	// 系统补充消息：以 user 角色承载，正文带特殊标签；内部逻辑用这些字段判断。
+	IsSupplement      bool         `json:"is_supplement,omitempty"`
+	SupplementKind    string       `json:"supplement_kind,omitempty"`    // env | mode | summary
+	SupplementSeq     int          `json:"supplement_seq,omitempty"`     // env=1；mode/summary>=2
+	SupplementMode    string       `json:"supplement_mode,omitempty"`    // plan | normal
+	SupplementCadence string       `json:"supplement_cadence,omitempty"` // full | brief
+	ToolCalls         []ToolCall   `json:"tool_calls,omitempty"`   // assistant 发起
+	ToolResults       []ToolResult `json:"tool_results,omitempty"` // user 回灌
+	CreatedAt         time.Time    `json:"created_at"`
 }
 
 // NewMessage 构造一条带时间戳的消息。

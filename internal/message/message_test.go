@@ -1,9 +1,12 @@
 package message
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 
 	"nekocode/internal/config"
+	"nekocode/internal/tool"
 )
 
 func prof(protocol string) config.Profile {
@@ -21,8 +24,11 @@ func TestNormalizeAnthropicBasic(t *testing.T) {
 		t.Fatal(err)
 	}
 	req := reqAny.(*anthropicRequest)
-	if req.System != "你是助手" {
-		t.Errorf("System = %q", req.System)
+	if len(req.System) != 1 || req.System[0].Text != "你是助手" {
+		t.Errorf("System = %+v", req.System)
+	}
+	if req.System[0].CacheControl == nil || req.System[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("system cache_control = %+v", req.System[0].CacheControl)
 	}
 	if req.MaxTokens != config.DefaultMaxTokens {
 		t.Errorf("MaxTokens = %d, want default %d", req.MaxTokens, config.DefaultMaxTokens)
@@ -87,22 +93,6 @@ func TestNormalizeAnthropicThinkingWithoutSignatureDropped(t *testing.T) {
 	}
 }
 
-func TestNormalizeAnthropicSummaryMergedIntoSystem(t *testing.T) {
-	p := prof(config.ProtocolAnthropic)
-	msgs := []Message{
-		{Role: RoleSystem, Content: "之前的对话摘要", IsSummary: true},
-		NewMessage(RoleUser, "继续"),
-	}
-	reqAny, _ := Normalize(p, "身份", nil, msgs)
-	req := reqAny.(*anthropicRequest)
-	if req.System != "身份\n\n之前的对话摘要" {
-		t.Errorf("System = %q", req.System)
-	}
-	if len(req.Messages) != 1 {
-		t.Errorf("len(Messages) = %d, want 1 (summary merged into system)", len(req.Messages))
-	}
-}
-
 func TestNormalizeOpenAIBasic(t *testing.T) {
 	p := prof(config.ProtocolOpenAI)
 	msgs := []Message{
@@ -137,28 +127,6 @@ func TestNormalizeOpenAIIgnoresThinking(t *testing.T) {
 	}
 }
 
-func TestNormalizeOpenAISummaryKeptAsSystem(t *testing.T) {
-	p := prof(config.ProtocolOpenAI)
-	msgs := []Message{
-		{Role: RoleSystem, Content: "摘要", IsSummary: true},
-		NewMessage(RoleUser, "q"),
-	}
-	reqAny, _ := Normalize(p, "身份", nil, msgs)
-	req := reqAny.(*openaiRequest)
-	if len(req.Messages) != 3 {
-		t.Fatalf("len(Messages) = %d, want 3", len(req.Messages))
-	}
-	if req.Messages[0].Role != "system" || req.Messages[0].Content != "身份" {
-		t.Errorf("msg[0] = %+v", req.Messages[0])
-	}
-	if req.Messages[1].Role != "system" || req.Messages[1].Content != "摘要" {
-		t.Errorf("msg[1] = %+v (summary should be kept as system)", req.Messages[1])
-	}
-	if req.Messages[2].Role != "user" {
-		t.Errorf("msg[2] = %+v", req.Messages[2])
-	}
-}
-
 func TestNormalizeUnknownProtocol(t *testing.T) {
 	p := prof("gemini")
 	if _, err := Normalize(p, "sys", nil, nil); err == nil {
@@ -174,5 +142,47 @@ func TestNormalizeAnthropicTemperaturePassthrough(t *testing.T) {
 	req := reqAny.(*anthropicRequest)
 	if req.Temperature == nil || *req.Temperature != 0.7 {
 		t.Errorf("Temperature = %v, want 0.7", req.Temperature)
+	}
+}
+
+func TestNormalizeAnthropicCacheBreakpoints(t *testing.T) {
+	p := prof(config.ProtocolAnthropic)
+	defs := []tool.Definition{
+		{Name: "a", Description: "A", Schema: map[string]any{"type": "object"}},
+		{Name: "b", Description: "B", Schema: map[string]any{"type": "object"}},
+	}
+	reqAny, err := Normalize(p, "sys", defs, []Message{NewMessage(RoleUser, "q")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := reqAny.(*anthropicRequest)
+	if len(req.System) != 1 || req.System[0].CacheControl == nil || req.System[0].CacheControl.Type != "ephemeral" {
+		t.Errorf("system cache_control = %+v", req.System)
+	}
+	if len(req.Tools) != 2 {
+		t.Fatalf("len(tools) = %d, want 2", len(req.Tools))
+	}
+	if req.Tools[0].CacheControl != nil {
+		t.Errorf("first tool should not have cache_control: %+v", req.Tools[0])
+	}
+	if req.Tools[1].CacheControl == nil || req.Tools[1].CacheControl.Type != "ephemeral" {
+		t.Errorf("last tool cache_control = %+v", req.Tools[1].CacheControl)
+	}
+	raw, _ := json.Marshal(req)
+	if n := strings.Count(string(raw), `"cache_control":{"type":"ephemeral"}`); n != 2 {
+		t.Errorf("cache_control occurrences = %d, want 2: %s", n, raw)
+	}
+}
+
+func TestNormalizeOpenAINoCacheControl(t *testing.T) {
+	p := prof(config.ProtocolOpenAI)
+	defs := []tool.Definition{{Name: "a", Description: "A", Schema: map[string]any{"type": "object"}}}
+	reqAny, err := Normalize(p, "sys", defs, []Message{NewMessage(RoleUser, "q")})
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, _ := json.Marshal(reqAny)
+	if strings.Contains(string(raw), "cache_control") {
+		t.Errorf("OpenAI request must not contain cache_control: %s", raw)
 	}
 }

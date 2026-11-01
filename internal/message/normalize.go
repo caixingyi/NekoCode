@@ -33,51 +33,62 @@ type anthropicThinking struct {
 	BudgetTokens int    `json:"budget_tokens"`
 }
 
+type anthropicCacheControl struct {
+	Type string `json:"type"`
+}
+
+type anthropicSystemBlock struct {
+	Type         string                 `json:"type"`
+	Text         string                 `json:"text"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
+}
+
 type anthropicTool struct {
-	Name        string         `json:"name"`
-	Description string         `json:"description"`
-	InputSchema map[string]any `json:"input_schema"`
+	Name         string                 `json:"name"`
+	Description  string                 `json:"description"`
+	InputSchema  map[string]any         `json:"input_schema"`
+	CacheControl *anthropicCacheControl `json:"cache_control,omitempty"`
 }
 
 type anthropicRequest struct {
-	Model       string             `json:"model"`
-	MaxTokens   int                `json:"max_tokens"`
-	System      string             `json:"system,omitempty"`
-	Messages    []anthropicMessage `json:"messages"`
-	Tools       []anthropicTool    `json:"tools,omitempty"`
-	Stream      bool               `json:"stream"`
-	Temperature *float64           `json:"temperature,omitempty"`
-	Thinking    *anthropicThinking `json:"thinking,omitempty"`
+	Model       string                 `json:"model"`
+	MaxTokens   int                    `json:"max_tokens"`
+	System      []anthropicSystemBlock `json:"system,omitempty"`
+	Messages    []anthropicMessage     `json:"messages"`
+	Tools       []anthropicTool        `json:"tools,omitempty"`
+	Stream      bool                   `json:"stream"`
+	Temperature *float64               `json:"temperature,omitempty"`
+	Thinking    *anthropicThinking     `json:"thinking,omitempty"`
 }
 
 // normalizeAnthropic 按 profile.Protocol 把内部消息与工具定义归一化为对应 provider 的请求体。
 func normalizeAnthropic(profile config.Profile, system string, tools []tool.Definition, msgs []Message) *anthropicRequest {
-	var systemParts []string
-	if strings.TrimSpace(system) != "" {
-		systemParts = append(systemParts, system)
-	}
-
 	var conv []anthropicMessage
-	//	对每条非 system 消息，按 role 转成 anthropicMessage
 	for _, m := range msgs {
-		if m.Role == RoleSystem {
-			if strings.TrimSpace(m.Content) != "" {
-				systemParts = append(systemParts, m.Content)
-			}
-			continue
-		}
 		conv = append(conv, toAnthropicMessage(m))
 	}
 
 	req := &anthropicRequest{
 		Model:     profile.Model,
 		MaxTokens: profile.EffectiveMaxTokens(),
-		System:    strings.Join(systemParts, "\n\n"),
 		Messages:  conv,
 		Stream:    true,
 	}
-	for _, d := range tools {
-		req.Tools = append(req.Tools, anthropicTool{Name: d.Name, Description: d.Description, InputSchema: d.Schema})
+	if strings.TrimSpace(system) != "" {
+		// 稳定 system 是缓存前缀的一部分；断点放在这个唯一 block 的末尾。
+		req.System = []anthropicSystemBlock{{
+			Type:         "text",
+			Text:         system,
+			CacheControl: &anthropicCacheControl{Type: "ephemeral"},
+		}}
+	}
+	for i, d := range tools {
+		at := anthropicTool{Name: d.Name, Description: d.Description, InputSchema: d.Schema}
+		// tool 定义也在稳定前缀里；最后一个 tool 上的断点让整个 tools 列表可缓存。
+		if i == len(tools)-1 {
+			at.CacheControl = &anthropicCacheControl{Type: "ephemeral"}
+		}
+		req.Tools = append(req.Tools, at)
 	}
 
 	if profile.Thinking != nil && profile.Thinking.Enabled {
