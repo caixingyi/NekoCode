@@ -3,12 +3,14 @@ package tui
 import (
 	"context"
 	"fmt"
+	"os"
 
 	tea "charm.land/bubbletea/v2"
 
 	"nekocode/internal/agent"
 	aictx "nekocode/internal/context"
 	"nekocode/internal/message"
+	"nekocode/internal/prompt"
 	"nekocode/internal/provider"
 )
 
@@ -56,6 +58,8 @@ func (m *Model) startRun(input string) tea.Cmd {
 	m.turn = 0
 	m.stopReason = ""
 	m.totalUsage = provider.Usage{}
+	m.turnUsage = provider.Usage{}
+	m.followTail = true
 	m.blocksSeen = 0
 	m.executing = 0
 	m.lastTool = ""
@@ -65,18 +69,45 @@ func (m *Model) startRun(input string) tea.Cmd {
 	m.notice = ""
 
 	profile := m.profile
+	promptSet := m.instructions
+	if promptSet == nil {
+		promptSet = prompt.New("")
+	}
 	ag := agent.New(agent.Config{
-		Provider:     prov,
-		Registry:     m.registry,
-		SystemPrompt: profile.EffectiveSystemPrompt(),
-		PlanMode:     m.sess.PlanMode,
-		Confirmer:    m.confirmer(),
+		Provider:   prov,
+		Registry:   m.registry,
+		Prompt:     promptSet,
+		PlanMode:   m.sess.PlanMode,
+		Confirmer:  m.confirmer(),
+		WorkDir:    m.workDir(),
+		RefreshEnv: m.envNeedsRefresh,
 		ContextLimit: func(msgs []message.Message) bool {
-			return aictx.ShouldSummarize(profile, msgs)
+			return aictx.ShouldSummarize(promptSet.System(), profile, msgs)
 		},
 	})
 	m.eventCh = ag.Run(ctx, m.sess.Messages, input)
+	m.envNeedsRefresh = false
 	return m.nextEvent()
+}
+
+// systemPrompt 返回当前 profile 对应的稳定 system 文本。
+func (m *Model) systemPrompt() string {
+	if m.instructions == nil {
+		return prompt.New("").System()
+	}
+	return m.instructions.System()
+}
+
+// workDir 返回环境采集使用的工作目录；registry 缺失时退回当前目录。
+func (m *Model) workDir() string {
+	if m.registry != nil {
+		return m.registry.Root()
+	}
+	wd, err := os.Getwd()
+	if err != nil {
+		return ""
+	}
+	return wd
 }
 
 // confirmer 构造确认器；没有 UI 通道时返回 nil，agent 会把写类工具按拒绝处理。
@@ -129,8 +160,7 @@ func (m *Model) handleAgentEvent(ev agent.Event) (tea.Model, tea.Cmd) {
 	case agent.EventTurnEnd:
 		m.turn = ev.Turn
 		m.turnUsage = ev.Usage
-		m.totalUsage.InputTokens += ev.Usage.InputTokens
-		m.totalUsage.OutputTokens += ev.Usage.OutputTokens
+		m.totalUsage = m.totalUsage.Add(ev.Usage)
 		m.syncHistory(ev)
 		m.resetTurnBuf()
 

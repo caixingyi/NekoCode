@@ -264,18 +264,12 @@ func TestEffectiveDefaults(t *testing.T) {
 	if p.EffectiveMaxTokens() != DefaultMaxTokens {
 		t.Errorf("max tokens = %d", p.EffectiveMaxTokens())
 	}
-	if p.EffectiveSystemPrompt() != DefaultSystemPrompt {
-		t.Errorf("system prompt not default")
-	}
 
-	p2 := Profile{Protocol: ProtocolOpenAI, BaseURL: "https://x", MaxTokens: 100, SystemPrompt: "hi"}
+	p2 := Profile{Protocol: ProtocolOpenAI, BaseURL: "https://x", MaxTokens: 100}
 	if p2.EffectiveBaseURL() != "https://x" {
 		t.Errorf("base url = %q", p2.EffectiveBaseURL())
 	}
 	if p2.EffectiveMaxTokens() != 100 {
 		t.Errorf("max tokens = %d", p2.EffectiveMaxTokens())
-	}
-	if p2.EffectiveSystemPrompt() != "hi" {
-		t.Errorf("system prompt = %q", p2.EffectiveSystemPrompt())
 	}
 }

@@ -35,6 +35,12 @@ func (m *Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyPressMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseWheelMsg:
+		var cmd tea.Cmd
+		m.viewport, cmd = m.viewport.Update(msg)
+		m.followTail = m.viewport.AtBottom()
+		return m, cmd
 	}
 
 	var cmd tea.Cmd
@@ -48,6 +54,30 @@ func (m *Model) handleKey(msg tea.KeyPressMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	ks := msg.String()
+
+	// 输入框为空或循环中不可输入时，普通 ↑/↓ 直接滚历史；有内容时仍归 textarea。
+	if (ks == "up" || ks == "down") && (m.busy() || strings.TrimSpace(m.input.Value()) == "") {
+		if ks == "up" {
+			m.viewport.ScrollUp(3)
+			m.followTail = false
+		} else {
+			m.viewport.ScrollDown(3)
+			m.followTail = m.viewport.AtBottom()
+		}
+		return m, nil
+	}
+
+	// 历史滚动优先于输入框与确认态；PgUp/PgDn 或 Option/Alt+↑/↓ 不进入 textarea。
+	switch ks {
+	case "pgup", "alt+up":
+		m.viewport.PageUp()
+		m.followTail = false
+		return m, nil
+	case "pgdown", "alt+down":
+		m.viewport.PageDown()
+		m.followTail = m.viewport.AtBottom()
+		return m, nil
+	}
 
 	if m.confirm != nil {
 		switch ks {
@@ -132,7 +162,7 @@ func (m *Model) handleSubmit() (tea.Model, tea.Cmd) {
 	m.notice = ""
 
 	// R21：达到阈值先自动压缩再发送（循环内部不做压缩）。
-	if aictx.ShouldSummarize(m.profile, m.sess.Messages) {
+	if aictx.ShouldSummarize(m.systemPrompt(), m.profile, m.sess.Messages) {
 		m.pendingSend = true
 		m.pendingText = text
 		m.notice = "上下文接近上限，正在自动压缩..."

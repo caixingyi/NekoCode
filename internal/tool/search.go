@@ -31,7 +31,7 @@ type findFiles struct{ root string }
 
 func (t findFiles) Name() string { return "find_files" }
 func (t findFiles) Description() string {
-	return "按 glob 模式（如 **/*.go）在工作目录下查找文件路径。"
+	return "按 glob 模式（如 **/*.go）在工作目录下查找文件路径。找文件优先用它，不要用 run_command 的 find。"
 }
 func (t findFiles) NeedsConfirm() bool { return false }
 func (t findFiles) IsReadOnly() bool   { return true }
@@ -101,7 +101,7 @@ type searchCode struct{ root string }
 
 func (t searchCode) Name() string { return "search_code" }
 func (t searchCode) Description() string {
-	return "用正则在工作目录的文件内容里搜索，返回 文件:行号:内容。"
+	return "用正则在工作目录的文件内容里搜索，返回 文件:行号:内容。搜索内容优先用它，不要用 run_command 的 grep。"
 }
 func (t searchCode) NeedsConfirm() bool { return false }
 func (t searchCode) IsReadOnly() bool   { return true }

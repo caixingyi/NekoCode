@@ -14,10 +14,12 @@ func itoa(n int) string { return strconv.Itoa(n) }
 
 type readFile struct{ root string }
 
-func (t readFile) Name() string        { return "read_file" }
-func (t readFile) Description() string { return "读取文件内容。超大文件按行截断。" }
-func (t readFile) NeedsConfirm() bool  { return false }
-func (t readFile) IsReadOnly() bool    { return true }
+func (t readFile) Name() string { return "read_file" }
+func (t readFile) Description() string {
+	return "读取文件内容。编辑前必须先用它读取；超大文件按行截断。"
+}
+func (t readFile) NeedsConfirm() bool { return false }
+func (t readFile) IsReadOnly() bool   { return true }
 func (t readFile) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -50,10 +52,12 @@ func (t readFile) Execute(_ context.Context, args map[string]any) Result {
 
 type writeFile struct{ root string }
 
-func (t writeFile) Name() string        { return "write_file" }
-func (t writeFile) Description() string { return "写入/覆盖文件（自动创建父目录）。" }
-func (t writeFile) NeedsConfirm() bool  { return true }
-func (t writeFile) IsReadOnly() bool    { return false }
+func (t writeFile) Name() string { return "write_file" }
+func (t writeFile) Description() string {
+	return "写入/覆盖文件（自动创建父目录）。仅用于新建文件或整文件覆盖；已有文件优先 edit_file。"
+}
+func (t writeFile) NeedsConfirm() bool { return true }
+func (t writeFile) IsReadOnly() bool   { return false }
 func (t writeFile) Schema() map[string]any {
 	return map[string]any{
 		"type": "object",
@@ -90,7 +94,7 @@ type editFile struct{ root string }
 
 func (t editFile) Name() string { return "edit_file" }
 func (t editFile) Description() string {
-	return "把文件中唯一匹配的 old_string 替换为 new_string。old_string 必须在文件中恰好出现一次。"
+	return "把文件中唯一匹配的 old_string 替换为 new_string。编辑前必须先用 read_file 读取；old_string 必须在文件中恰好出现一次。"
 }
 func (t editFile) NeedsConfirm() bool { return true }
 func (t editFile) IsReadOnly() bool   { return false }

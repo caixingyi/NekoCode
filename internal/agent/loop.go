@@ -4,6 +4,7 @@ import (
 	"strings"
 	"time"
 
+	"nekocode/internal/environment"
 	"nekocode/internal/message"
 	"nekocode/internal/provider"
 	"nekocode/internal/tool"
@@ -48,8 +49,7 @@ func (t turnResult) isEmpty() bool {
 // loop 是 ReAct 循环主体（R1）。每轮以「事件 + 历史快照」对外汇报，
 // 退出前一定发出 EventDone。
 func (r *run) loop(history []message.Message, input string) {
-	msgs := cloneMessages(history)
-	msgs = append(msgs, message.NewMessage(message.RoleUser, input))
+	msgs := r.prepareHistory(history, input)
 	r.send(Event{Type: EventUserMessage, Text: input, Messages: cloneMessages(msgs)})
 
 	var total provider.Usage
@@ -71,9 +71,9 @@ func (r *run) loop(history []message.Message, input string) {
 			return
 		}
 
+		msgs = r.injectModeSupplement(msgs, turn)
 		res := r.runTurn(msgs, turn)
-		total.InputTokens += res.usage.InputTokens
-		total.OutputTokens += res.usage.OutputTokens
+		total = total.Add(res.usage)
 
 		asst := res.assistant()
 		turnStop := StopReason(res.stopReason)
@@ -146,6 +146,60 @@ func (r *run) loop(history []message.Message, input string) {
 	}
 }
 
+// prepareHistory 复制历史，确保 env 补充消息在首位，再追加本次用户输入。
+func (r *run) prepareHistory(history []message.Message, input string) []message.Message {
+	msgs := cloneMessages(history)
+	msgs = r.ensureEnvSupplement(msgs)
+	return append(msgs, message.NewMessage(message.RoleUser, input))
+}
+
+// ensureEnvSupplement 保证环境补充消息存在且位于首位。
+// RefreshEnv 为真时重新采集并替换；否则保留快照，只做位置/去重整理。
+func (r *run) ensureEnvSupplement(msgs []message.Message) []message.Message {
+	idx := message.FindLastSupplement(msgs, message.SupplementEnv)
+	if idx >= 0 && !r.agent.cfg.RefreshEnv {
+		supp := msgs[idx]
+		out := make([]message.Message, 0, len(msgs))
+		out = append(out, supp)
+		for i, m := range msgs {
+			if i == idx || (m.IsSupplement && m.SupplementKind == message.SupplementEnv) {
+				continue
+			}
+			out = append(out, m)
+		}
+		return out
+	}
+
+	collect := r.agent.cfg.CollectEnv
+	if collect == nil {
+		collect = environment.Collect
+	}
+	supp := message.NewEnvSupplement(r.agent.cfg.Prompt.EnvSupplement(collect(r.ctx, r.agent.cfg.WorkDir)))
+	out := make([]message.Message, 0, len(msgs)+1)
+	out = append(out, supp)
+	for _, m := range msgs {
+		if m.IsSupplement && m.SupplementKind == message.SupplementEnv {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
+// injectModeSupplement 在每轮模型调用前注入 plan 模式提示。
+// 第 1、6、11… 轮完整，其余精简；刚由 TUI 追加的完整进入提示可覆盖第 1 轮。
+func (r *run) injectModeSupplement(msgs []message.Message, turn int) []message.Message {
+	if !r.agent.cfg.PlanMode {
+		return msgs
+	}
+	if turn == 1 && message.HasFreshFullModeSupplement(msgs, true) {
+		return msgs
+	}
+	full := turn == 1 || (turn > 1 && (turn-1)%5 == 0)
+	supp := message.NewModeSupplement(message.NextSupplementSeq(msgs), true, full, r.agent.cfg.Prompt.PlanSupplement(full))
+	return append(msgs, supp)
+}
+
 // runTurn 发起一次模型调用并收集产出。工具调用只在此处累积，
 // 对应的 EventToolCallStart 由执行阶段发出（那时才知道批次与是否需要确认）。
 func (r *run) runTurn(msgs []message.Message, turn int) turnResult {
@@ -154,7 +208,7 @@ func (r *run) runTurn(msgs []message.Message, turn int) turnResult {
 		defs = r.agent.cfg.Registry.Definitions()
 	}
 	// plan 模式同样下发全部工具定义，只在执行阶段拦截（R15）。
-	ch := r.agent.cfg.Provider.Stream(r.ctx, r.agent.cfg.SystemPrompt, defs, msgs)
+	ch := r.agent.cfg.Provider.Stream(r.ctx, r.agent.cfg.Prompt.System(), defs, msgs)
 
 	var res turnResult
 	for ev := range ch {

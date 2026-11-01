@@ -17,10 +17,6 @@ func TestRenderMessage(t *testing.T) {
 	if !strings.Contains(a, "回复") || !strings.Contains(a, "思考") {
 		t.Errorf("assistant render = %q", a)
 	}
-	s := renderMessage(message.Message{Role: message.RoleSystem, IsSummary: true, Content: "旧对话摘要"}, 80)
-	if !strings.Contains(s, "[摘要]") || !strings.Contains(s, "旧对话摘要") {
-		t.Errorf("summary render = %q", s)
-	}
 }
 
 func TestWelcomeRender(t *testing.T) {

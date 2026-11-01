@@ -84,7 +84,7 @@ func TestSummarizeNoTriggerUnderThreshold(t *testing.T) {
 	p := config.Profile{Model: "claude-x", ContextWindow: 100000} // 阈值很高
 	msgs := genMsgs(20, 20)
 	fp := &fakeProvider{text: "SUMMARY"}
-	out, n, err := Summarize(context.Background(), fp, p, msgs, false)
+	out, n, err := Summarize(context.Background(), fp, "", p, msgs, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -100,7 +100,7 @@ func TestSummarizeTriggeredOverThreshold(t *testing.T) {
 	p := config.Profile{Model: "claude-x", ContextWindow: 100} // 阈值 80 tokens
 	msgs := genMsgs(20, 20)                                    // ~100 tokens -> 触发
 	fp := &fakeProvider{text: "这是摘要"}
-	out, n, err := Summarize(context.Background(), fp, p, msgs, false)
+	out, n, err := Summarize(context.Background(), fp, "", p, msgs, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -110,7 +110,8 @@ func TestSummarizeTriggeredOverThreshold(t *testing.T) {
 	if len(out) != 13 {
 		t.Fatalf("len(out) = %d, want 13 (1 summary + 12 recent)", len(out))
 	}
-	if !out[0].IsSummary || out[0].Content != "这是摘要" || out[0].Role != message.RoleSystem {
+	if !out[0].IsSupplement || out[0].SupplementKind != message.SupplementSummary ||
+		out[0].Role != message.RoleUser || !strings.Contains(out[0].Content, "这是摘要") {
 		t.Errorf("summary message = %+v", out[0])
 	}
 	if fp.gotSystem != summariseSystemPrompt {
@@ -122,7 +123,7 @@ func TestSummarizeForceBypassesThreshold(t *testing.T) {
 	p := config.Profile{Model: "claude-x", ContextWindow: 100000} // 阈值很高
 	msgs := genMsgs(20, 20)
 	fp := &fakeProvider{text: "强制摘要"}
-	out, n, err := Summarize(context.Background(), fp, p, msgs, true) // force
+	out, n, err := Summarize(context.Background(), fp, "", p, msgs, true) // force
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -135,7 +136,7 @@ func TestSummarizeTooShortNoOp(t *testing.T) {
 	p := config.Profile{Model: "claude-x", ContextWindow: 10} // 阈值 8 tokens，容易触发
 	msgs := genMsgs(10, 20)                                   // 但消息数 10 < keep 12
 	fp := &fakeProvider{text: "摘要"}
-	out, n, err := Summarize(context.Background(), fp, p, msgs, false)
+	out, n, err := Summarize(context.Background(), fp, "", p, msgs, false)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -148,7 +149,7 @@ func TestSummarizeProviderError(t *testing.T) {
 	p := config.Profile{Model: "claude-x", ContextWindow: 100}
 	msgs := genMsgs(20, 20)
 	fp := &fakeProvider{err: errors.New("boom")}
-	_, n, err := Summarize(context.Background(), fp, p, msgs, false)
+	_, n, err := Summarize(context.Background(), fp, "", p, msgs, false)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -161,34 +162,96 @@ func TestSummarizeEmptyResultError(t *testing.T) {
 	p := config.Profile{Model: "claude-x", ContextWindow: 100}
 	msgs := genMsgs(20, 20)
 	fp := &fakeProvider{text: "   "} // 空白
-	_, _, err := Summarize(context.Background(), fp, p, msgs, false)
+	_, _, err := Summarize(context.Background(), fp, "", p, msgs, false)
 	if err == nil {
 		t.Fatal("expected error for empty summary")
 	}
 }
 
-func TestSummarizeIncorporatesOldSummary(t *testing.T) {
+func TestSummarizePreservesEnvSupplement(t *testing.T) {
 	p := config.Profile{Model: "claude-x", ContextWindow: 100}
-	msgs := append([]message.Message{
-		{Role: message.RoleSystem, Content: "旧摘要内容", IsSummary: true},
-	}, genMsgs(14, 20)...) // 1 summary + 14 conv = 15 msgs; keep 12 -> 压缩 3 (含旧摘要)
+	msgs := []message.Message{message.NewEnvSupplement("ENV-MARK")}
+	msgs = append(msgs, genMsgs(20, 20)...)
 
-	fp := &fakeProvider{text: "新摘要"}
-	out, n, err := Summarize(context.Background(), fp, p, msgs, true)
+	fp := &fakeProvider{text: "摘要"}
+	out, n, err := Summarize(context.Background(), fp, "", p, msgs, true)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if n != 3 {
-		t.Errorf("n = %d, want 3 (old summary + 2 conv folded)", n)
+	if n != 8 {
+		t.Errorf("compressed = %d, want 8", n)
 	}
-	if len(out) != 13 || !out[0].IsSummary {
-		t.Errorf("out = %+v", out)
+	if len(out) != 14 {
+		t.Fatalf("len(out) = %d, want 14 (env + summary + 12)", len(out))
 	}
-	// 确认旧摘要被并入摘要请求的 transcript。
-	if len(fp.gotMsgs) != 1 || !strings.Contains(fp.gotMsgs[0].Content, "旧摘要内容") {
-		t.Errorf("transcript did not incorporate old summary: %q", fp.gotMsgs[0].Content)
+	if !out[0].IsSupplement || out[0].SupplementKind != message.SupplementEnv || !strings.Contains(out[0].Content, "ENV-MARK") {
+		t.Errorf("env 补充消息 not preserved first: %+v", out[0])
 	}
-	if !strings.Contains(fp.gotMsgs[0].Content, "[摘要]") {
-		t.Errorf("transcript missing [摘要] marker")
+	if out[1].SupplementKind != message.SupplementSummary || out[1].SupplementSeq != 2 {
+		t.Errorf("summary 补充消息 = %+v", out[1])
+	}
+}
+
+func TestSummarizeKeepsToolPair(t *testing.T) {
+	p := config.Profile{Model: "claude-x", ContextWindow: 100}
+	msgs := make([]message.Message, 0, 21)
+	for i := 0; i < 8; i++ {
+		role := message.RoleUser
+		if i%2 == 1 {
+			role = message.RoleAssistant
+		}
+		msgs = append(msgs, message.NewMessage(role, "filler"))
+	}
+	msgs = append(msgs, message.Message{
+		Role:      message.RoleAssistant,
+		ToolCalls: []message.ToolCall{{ID: "t1", Name: "read_file"}},
+	})
+	msgs = append(msgs, message.Message{
+		Role:        message.RoleUser,
+		ToolResults: []message.ToolResult{{ID: "t1", Content: "ok"}},
+	})
+	for i := 0; i < 11; i++ {
+		role := message.RoleUser
+		if i%2 == 1 {
+			role = message.RoleAssistant
+		}
+		msgs = append(msgs, message.NewMessage(role, "after"))
+	}
+
+	fp := &fakeProvider{text: "摘要"}
+	out, n, err := Summarize(context.Background(), fp, "", p, msgs, true)
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 切分点原来落在 tool_result 上，safeCut 向前移到 assistant.tool_use。
+	if n != 8 {
+		t.Errorf("compressed = %d, want 8", n)
+	}
+	found := false
+	for i, m := range out {
+		if len(m.ToolCalls) == 0 {
+			continue
+		}
+		found = true
+		if i+1 >= len(out) || len(out[i+1].ToolResults) != 1 || out[i+1].ToolResults[0].ID != "t1" {
+			t.Fatalf("tool_use not followed by paired tool_result: %+v", out)
+		}
+	}
+	if !found {
+		t.Fatal("tool pair missing from summary output")
+	}
+}
+
+func TestBuildTranscriptLabelsSupplement(t *testing.T) {
+	note := message.NewModeSupplement(2, true, true, "plan body")
+	tr := buildTranscript([]message.Message{note, message.NewMessage(message.RoleUser, "question")})
+	if !strings.Contains(tr, "[系统补充]\n") {
+		t.Errorf("transcript missing 补充消息 marker:\n%s", tr)
+	}
+	if !strings.Contains(tr, "plan body") {
+		t.Errorf("transcript missing note body:\n%s", tr)
+	}
+	if !strings.Contains(tr, "[用户]\nquestion") {
+		t.Errorf("transcript missing user message:\n%s", tr)
 	}
 }

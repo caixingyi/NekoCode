@@ -9,6 +9,7 @@ import (
 	"charm.land/lipgloss/v2"
 
 	"nekocode/internal/message"
+	"nekocode/internal/provider"
 )
 
 var (
@@ -17,7 +18,6 @@ var (
 	thinkingStyle  = lipgloss.NewStyle().Foreground(lipgloss.Color("245")).Italic(true)
 	noticeStyle    = lipgloss.NewStyle().Foreground(lipgloss.Color("33"))
 	errStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("203"))
-	summaryStyle   = lipgloss.NewStyle().Foreground(lipgloss.Color("240")).Italic(true)
 	catStyle       = lipgloss.NewStyle().Foreground(lipgloss.Color("208"))
 	titleStyle     = lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("213"))
 	faintStyle     = lipgloss.NewStyle().Faint(true)
@@ -37,33 +37,93 @@ func (m *Model) View() tea.View {
 
 	if len(m.sess.Messages) == 0 && m.streamBuf == "" && !m.busy() {
 		b.WriteString(m.welcome())
-	} else {
-		b.WriteString(m.header())
-		b.WriteString("\n")
-		b.WriteString(strings.Repeat("─", max(m.width-2, 20)))
-		b.WriteString("\n\n")
-
-		for _, msg := range m.sess.Messages {
-			if s := renderMessage(msg, m.width); s != "" {
-				b.WriteString(s)
-				b.WriteString("\n")
-			}
+		if m.errMsg != "" {
+			b.WriteString(errStyle.Render("⚠ " + m.errMsg))
+			b.WriteString("\n")
 		}
-
-		// 当前轮正在流式生成的内容；已完成的部分由上面的历史快照渲染。
-		if m.running && (m.streamBuf != "" || m.thinkBuf != "") {
-			if m.thinkBuf != "" {
-				b.WriteString(thinkingStyle.Render("💭 " + m.thinkBuf))
-				b.WriteString("\n")
-			}
-			if m.streamBuf != "" {
-				b.WriteString(assistantStyle.Render("🤖 " + m.streamBuf))
-				b.WriteString("\n")
-			}
+		if m.notice != "" {
+			b.WriteString(noticeStyle.Render(m.notice))
+			b.WriteString("\n")
 		}
+		if m.errMsg != "" || m.notice != "" {
+			b.WriteString("\n")
+		}
+		b.WriteString(m.input.View())
+		v := tea.NewView(b.String())
+		v.MouseMode = tea.MouseModeCellMotion
+		return v
 	}
 
-	// 工具确认提示。
+	// 固定顶栏 + 可滚动历史 + 固定底部（状态/确认/输入）。
+	bottom := m.bottomView()
+	m.syncViewport(bottom)
+	b.WriteString(m.header())
+	b.WriteString("\n")
+	b.WriteString(strings.Repeat("─", m.contentWidth()))
+	b.WriteString("\n\n")
+	b.WriteString(strings.TrimRight(m.viewport.View(), "\n"))
+	b.WriteString("\n")
+	b.WriteString(bottom)
+	v := tea.NewView(b.String())
+	v.MouseMode = tea.MouseModeCellMotion
+	return v
+}
+
+// contentWidth 是历史/分隔线使用的宽度；留 2 列给终端边距。
+func (m *Model) contentWidth() int {
+	return max(m.width-2, 20)
+}
+
+// syncViewport 把当前历史与流式内容同步到 viewport，并按底部高度计算可视行数。
+// 用户没有向上翻时自动跟随尾部；向上翻后保留原偏移，不被新内容拽回。
+func (m *Model) syncViewport(bottom string) {
+	m.viewport.SetWidth(m.contentWidth())
+	h := 20
+	if m.height > 0 {
+		h = m.height - 3 - lipgloss.Height(bottom)
+		if h < 3 {
+			h = 3
+		}
+	}
+	m.viewport.SetHeight(h)
+
+	wasBottom := m.viewport.AtBottom()
+	y := m.viewport.YOffset()
+	m.viewport.SetContent(m.conversationView())
+	if m.followTail || wasBottom {
+		m.viewport.GotoBottom()
+		m.followTail = true
+		return
+	}
+	m.viewport.SetYOffset(y)
+}
+
+// conversationView 渲染历史 + 当前流式内容，不包含顶栏和底部输入区。
+func (m *Model) conversationView() string {
+	var b strings.Builder
+	width := m.contentWidth()
+	for _, msg := range m.sess.Messages {
+		if s := renderMessage(msg, width); s != "" {
+			b.WriteString(s)
+			b.WriteString("\n")
+		}
+	}
+	if m.running && (m.streamBuf != "" || m.thinkBuf != "") {
+		if m.thinkBuf != "" {
+			b.WriteString(thinkingStyle.Render("💭 " + m.thinkBuf))
+			b.WriteString("\n")
+		}
+		if m.streamBuf != "" {
+			b.WriteString(assistantStyle.Render("🤖 " + m.streamBuf))
+			b.WriteString("\n")
+		}
+	}
+	return strings.TrimRight(b.String(), "\n")
+}
+
+// bottomView 是固定在视口下方的状态、确认提示与输入框。
+func (m *Model) bottomView() string {
+	var b strings.Builder
 	if m.confirm != nil {
 		b.WriteString(toolStyle.Render("🔧 " + m.confirm.call.Name))
 		b.WriteString("\n")
@@ -78,7 +138,6 @@ func (m *Model) View() tea.View {
 		b.WriteString(faintStyle.Render("⏳ 生成中..."))
 		b.WriteString("\n")
 	}
-
 	if m.errMsg != "" {
 		b.WriteString(errStyle.Render("⚠ " + m.errMsg))
 		b.WriteString("\n")
@@ -87,12 +146,11 @@ func (m *Model) View() tea.View {
 		b.WriteString(noticeStyle.Render(m.notice))
 		b.WriteString("\n")
 	}
-
 	b.WriteString("\n")
 	if !m.busy() {
 		b.WriteString(m.input.View())
 	}
-	return tea.NewView(b.String())
+	return strings.TrimRight(b.String(), "\n")
 }
 
 // welcome 渲染启动欢迎界面（空会话时）：猫咪 ASCII + 标题 + 信息 + 开始提示。
@@ -113,7 +171,9 @@ func (m *Model) welcome() string {
 		"  • 输入问题，Enter 发送",
 		"  • /help 查看命令 · /switch 换模型",
 		"  • /think 开启思考(Claude) · /plan 计划模式",
-		"  • Ctrl+J 换行 · Esc/Ctrl+C 取消 · Ctrl+C 退出",
+		"  • 空输入 ↑/↓ 滚动历史",
+		"  • PgUp/PgDn 或 Alt+↑↓ 翻页 · Ctrl+J 换行",
+		"  • Esc/Ctrl+C 取消 · Ctrl+C 退出",
 	}
 	right := strings.Join(rightLines, "\n")
 
@@ -141,16 +201,63 @@ func (m *Model) header() string {
 		b.WriteString("  ")
 		b.WriteString(faintStyle.Render(fmt.Sprintf("%s %s", m.lastTool, m.lastExec.Round(time.Millisecond))))
 	}
-	if u := m.totalUsage; u.InputTokens+u.OutputTokens > 0 {
-		b.WriteString("  ")
-		b.WriteString(faintStyle.Render(fmt.Sprintf("↑%d ↓%d tok", u.InputTokens, u.OutputTokens)))
+	// 窄终端按优先级降级：先省累计 token 与帮助提示，缓存命中始终保留。
+	detail := m.width == 0 || m.width >= 100
+	if detail {
+		if u := m.totalUsage; u.InputTokens+u.OutputTokens > 0 {
+			b.WriteString("  ")
+			b.WriteString(faintStyle.Render(fmt.Sprintf("↑%d ↓%d tok", u.InputTokens, u.OutputTokens)))
+		}
 	}
 	b.WriteString("  ")
-	b.WriteString(faintStyle.Render("/help · Esc 取消 · Ctrl+C 退出"))
+	if m.width > 0 && m.width < 100 {
+		b.WriteString(faintStyle.Render(compactCacheText(m.turnUsage)))
+	} else {
+		b.WriteString(faintStyle.Render(cacheText(m.turnUsage)))
+	}
+	if detail {
+		b.WriteString("  ")
+		b.WriteString(faintStyle.Render("/help · Esc 取消 · Ctrl+C 退出"))
+	}
 	return b.String()
 }
 
+// cacheText 展示最近一轮的缓存读取/总输入/命中率；未知时显示 —。
+func cacheText(u provider.Usage) string {
+	if !u.CacheUsageKnown || u.InputTokens <= 0 {
+		return "缓存 —"
+	}
+	rate := float64(u.CacheReadTokens) / float64(u.InputTokens) * 100
+	if u.CacheReadTokens == 0 && u.CacheCreationTokens > 0 {
+		return fmt.Sprintf("缓存 0%% (写 %s)", formatTokens(u.CacheCreationTokens))
+	}
+	return fmt.Sprintf("缓存 %s/%s %.0f%%", formatTokens(u.CacheReadTokens), formatTokens(u.InputTokens), rate)
+}
+
+// compactCacheText 是窄终端下的短版本，只保留命中率。
+func compactCacheText(u provider.Usage) string {
+	if !u.CacheUsageKnown || u.InputTokens <= 0 {
+		return "缓存 —"
+	}
+	rate := float64(u.CacheReadTokens) / float64(u.InputTokens) * 100
+	return fmt.Sprintf("缓存 %.0f%%", rate)
+}
+
+func formatTokens(n int) string {
+	switch {
+	case n >= 1_000_000:
+		return fmt.Sprintf("%.1fm", float64(n)/1_000_000)
+	case n >= 1_000:
+		return fmt.Sprintf("%.1fk", float64(n)/1_000)
+	default:
+		return fmt.Sprintf("%d", n)
+	}
+}
+
 func renderMessage(msg message.Message, width int) string {
+	if msg.IsSupplement {
+		return ""
+	}
 	switch msg.Role {
 	case message.RoleUser:
 		if len(msg.ToolResults) > 0 {
@@ -185,11 +292,6 @@ func renderMessage(msg message.Message, width int) string {
 			s.WriteString("\n")
 		}
 		return strings.TrimRight(s.String(), "\n")
-	case message.RoleSystem:
-		if msg.IsSummary {
-			return summaryStyle.Render("[摘要] " + msg.Content)
-		}
-		return ""
 	}
 	return msg.Content
 }

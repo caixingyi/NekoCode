@@ -55,6 +55,14 @@ func NewRegistry(root string) *Registry {
 // Register 登记一个工具。
 func (r *Registry) Register(t Tool) { r.tools[t.Name()] = t }
 
+// Root 返回注册中心的工作目录根；nil Registry 返回空串。
+func (r *Registry) Root() string {
+	if r == nil {
+		return ""
+	}
+	return r.root
+}
+
 // Get 按名查找工具。
 func (r *Registry) Get(name string) (Tool, bool) {
 	t, ok := r.tools[name]

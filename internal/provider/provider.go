@@ -38,9 +38,38 @@ const (
 )
 
 // Usage 是一次模型调用的 token 用量（R25）。
+// InputTokens 是归一化后的总输入：Anthropic = 非缓存输入 + 缓存写入 + 缓存读取；
+// OpenAI = prompt_tokens（已包含缓存读取）。
 type Usage struct {
 	InputTokens  int
 	OutputTokens int
+	// CacheReadTokens 是本轮从缓存读取的 token。
+	CacheReadTokens int
+	// CacheCreationTokens 是本轮写入缓存的 token；OpenAI 不单独报告，恒为 0。
+	CacheCreationTokens int
+	// CacheUsageKnown 表示 provider 是否真的返回了缓存字段；
+	// false 时不能把 0 当作“未命中”。
+	CacheUsageKnown bool
+}
+
+// Add 累加两次调用的用量；缓存字段按“任一已知即可用”合并。
+func (u Usage) Add(v Usage) Usage {
+	return Usage{
+		InputTokens:         u.InputTokens + v.InputTokens,
+		OutputTokens:        u.OutputTokens + v.OutputTokens,
+		CacheReadTokens:     u.CacheReadTokens + v.CacheReadTokens,
+		CacheCreationTokens: u.CacheCreationTokens + v.CacheCreationTokens,
+		CacheUsageKnown:     u.CacheUsageKnown || v.CacheUsageKnown,
+	}
+}
+
+// CacheHitRate 返回缓存读取占本轮总输入的比例。
+// provider 未返回缓存字段或总输入为 0 时返回 false。
+func (u Usage) CacheHitRate() (float64, bool) {
+	if !u.CacheUsageKnown || u.InputTokens <= 0 {
+		return 0, false
+	}
+	return float64(u.CacheReadTokens) / float64(u.InputTokens), true
 }
 
 // StreamEvent 是 Provider 流式输出的统一事件。

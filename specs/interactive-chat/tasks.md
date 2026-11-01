@@ -19,7 +19,7 @@
 - [x] T3：统一消息模型与归一化
   - 依赖：T2
   - 覆盖：R9，R10
-  - 完成标准：实现 `Message`（Role/Content/Thinking/Signature/IsSummary/CreatedAt）；`Normalize(profile, system, []Message)` 按协议产出请求体：Anthropic 顶层 system 拼接、assistant 含 thinking+signature 时输出 `[{thinking},{text}]` 否则 `[{text}]`、max_tokens 缺省 4096、开 thinking 时 temperature 强制 1.0 且 max_tokens>budget_tokens；OpenAI messages 数组、system 消息保留、content 为纯文本、丢弃 thinking/signature。
+  - 完成标准：实现 `Message`（Role/Content/Thinking/Signature/CreatedAt）；`Normalize(profile, system, []Message)` 按协议产出请求体：Anthropic 顶层 system 拼接、assistant 含 thinking+signature 时输出 `[{thinking},{text}]` 否则 `[{text}]`、max_tokens 缺省 4096、开 thinking 时 temperature 强制 1.0 且 max_tokens>budget_tokens；OpenAI messages 数组、system 消息保留、content 为纯文本、丢弃 thinking/signature。
   - 验证方式：已执行 - `go test ./internal/message` 通过（10 测试），`go vet` 通过；覆盖两家归一化、thinking 回传/丢弃、摘要 system、temperature/max_tokens 约束。
 
 - [x] T4：Provider 接口与共享 SSE reader
@@ -49,7 +49,7 @@
 - [x] T8：上下文管理（估算 + 摘要）
   - 依赖：T4
   - 覆盖：R22，R23，R24，R25，AC8
-  - 完成标准：`Estimate([]Message, system)` 按字符/系数（默认 4）求和；`ContextWindow(profile)` 解析 profile > 内置模型默认表 > 8k 兜底；`Summarize(ctx, provider, profile, []Message)`：达 80% 阈值时把旧消息请求模型压成一条 role=system/IsSummary 消息，保留 system_prompt + 最近 6 轮；返回新消息切片与已压缩轮数；摘要请求失败时回退不压缩并返回错误。
+  - 完成标准：`Estimate([]Message, system)` 按字符/系数（默认 4）求和；`ContextWindow(profile)` 解析 profile > 内置模型默认表 > 8k 兜底；`Summarize(ctx, provider, profile, []Message)`：达 80% 阈值时把旧消息请求模型压成一条 summary 补充消息，保留 system_prompt + 最近 6 轮；返回新消息切片与已压缩轮数；摘要请求失败时回退不压缩并返回错误。
   - 验证方式：已执行 - `go test ./internal/context` 通过（9 测试，用 fake provider 验证估算/context_window 解析/触发/不触发/强制/过短/错误/空摘要/并入旧摘要）。
 
 - [x] T9：TUI 骨架（状态 / 输入 / 渲染 / 主循环）

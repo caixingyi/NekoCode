@@ -12,10 +12,12 @@ import (
 
 	"charm.land/bubbles/v2/key"
 	"charm.land/bubbles/v2/textarea"
+	"charm.land/bubbles/v2/viewport"
 	tea "charm.land/bubbletea/v2"
 
 	"nekocode/internal/agent"
 	"nekocode/internal/config"
+	"nekocode/internal/prompt"
 	"nekocode/internal/provider"
 	"nekocode/internal/session"
 	"nekocode/internal/tool"
@@ -32,8 +34,15 @@ type Model struct {
 	profile     config.Profile
 	profileName string
 	sess        *session.Session
+	// instructions 是当前 profile 对应的稳定指令集；/switch、/resume 后重建。
+	instructions *prompt.Prompt
+	// envNeedsRefresh 为真时，下一次 agent.Run 重新采集环境并替换 env 补充消息。
+	envNeedsRefresh bool
 
-	input textarea.Model
+	input    textarea.Model
+	viewport viewport.Model
+	// followTail 为真时新内容自动滚到底部；用户向上翻后被置假。
+	followTail bool
 
 	// 一次循环（agent.Run）的状态。
 	eventCh <-chan agent.Event
@@ -82,7 +91,7 @@ func New(cfg *config.Config, profileName string, store *session.Store, registry 
 		return nil, err
 	}
 	ta := textarea.New()
-	ta.Placeholder = "输入问题，Enter 发送，Ctrl+J 换行，/help 查看命令"
+	ta.Placeholder = "输入问题，Enter 发送，↑/↓ 滚动历史，/help 查看命令"
 	ta.Prompt = "> "
 	ta.ShowLineNumbers = false
 	ta.CharLimit = 0
@@ -96,14 +105,22 @@ func New(cfg *config.Config, profileName string, store *session.Store, registry 
 	km.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j", "alt+enter", "shift+enter"))
 	ta.KeyMap = km
 
+	vp := viewport.New(viewport.WithWidth(80), viewport.WithHeight(10))
+	vp.SoftWrap = true
+	vp.FillHeight = true
+
 	return &Model{
-		cfg:         cfg,
-		store:       store,
-		registry:    registry,
-		profile:     profile,
-		profileName: profileName,
-		sess:        session.NewSession(profileName),
-		input:       ta,
+		cfg:             cfg,
+		store:           store,
+		registry:        registry,
+		profile:         profile,
+		profileName:     profileName,
+		sess:            session.NewSession(profileName),
+		instructions:    prompt.New(profile.SystemPrompt),
+		envNeedsRefresh: true,
+		input:           ta,
+		viewport:        vp,
+		followTail:      true,
 	}, nil
 }
 

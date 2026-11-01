@@ -152,6 +152,84 @@ func TestOpenAIStreamUnknownFinishReason(t *testing.T) {
 	}
 }
 
+func TestAnthropicStreamCacheUsage(t *testing.T) {
+	sse := strings.Join([]string{
+		"event: message_start\ndata: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":20,\"cache_read_input_tokens\":30,\"output_tokens\":1}}}\n\n",
+		"event: message_delta\ndata: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"end_turn\"},\"usage\":{\"output_tokens\":7}}\n\n",
+		"event: message_stop\ndata: {\"type\":\"message_stop\"}\n\n",
+	}, "")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/event-stream")
+		w.WriteHeader(200)
+		w.Write([]byte(sse))
+	}))
+	defer srv.Close()
+
+	p, _ := newAnthropic(anthropicProfile(srv.URL))
+	done := findDone(t, drain(p.Stream(context.Background(), "sys", nil, nil)))
+	if done.Usage == nil {
+		t.Fatal("Usage should not be nil")
+	}
+	u := *done.Usage
+	if u.InputTokens != 60 || u.OutputTokens != 7 {
+		t.Errorf("usage = %+v, want total input 60 output 7", u)
+	}
+	if u.CacheReadTokens != 30 || u.CacheCreationTokens != 20 {
+		t.Errorf("cache = read %d create %d, want 30/20", u.CacheReadTokens, u.CacheCreationTokens)
+	}
+	if !u.CacheUsageKnown {
+		t.Error("CacheUsageKnown = false, want true")
+	}
+	if rate, ok := u.CacheHitRate(); !ok || rate != 0.5 {
+		t.Errorf("CacheHitRate = %v, %v; want 0.5, true", rate, ok)
+	}
+}
+
+func TestOpenAIStreamCacheUsage(t *testing.T) {
+	sse := strings.Join([]string{
+		`data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":7,"prompt_tokens_details":{"cached_tokens":80}}}`, "",
+		`data: [DONE]`, "",
+	}, "\n")
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(200)
+		w.Write([]byte(sse))
+	}))
+	defer srv.Close()
+
+	p, _ := newOpenAI(openaiProfile(srv.URL))
+	done := findDone(t, drain(p.Stream(context.Background(), "sys", nil, nil)))
+	if done.Usage == nil {
+		t.Fatal("Usage should not be nil")
+	}
+	u := *done.Usage
+	if u.InputTokens != 100 || u.OutputTokens != 7 {
+		t.Errorf("usage = %+v, want 100/7", u)
+	}
+	if u.CacheReadTokens != 80 || u.CacheCreationTokens != 0 {
+		t.Errorf("cache = read %d create %d, want 80/0", u.CacheReadTokens, u.CacheCreationTokens)
+	}
+	if !u.CacheUsageKnown {
+		t.Error("CacheUsageKnown = false, want true")
+	}
+	if rate, ok := u.CacheHitRate(); !ok || rate != 0.8 {
+		t.Errorf("CacheHitRate = %v, %v; want 0.8, true", rate, ok)
+	}
+}
+
+func TestUsageUnknownAndAdd(t *testing.T) {
+	unknown := Usage{InputTokens: 10}
+	if _, ok := unknown.CacheHitRate(); ok {
+		t.Error("unknown cache usage should not produce a hit rate")
+	}
+
+	u := Usage{InputTokens: 100, OutputTokens: 10, CacheReadTokens: 60, CacheCreationTokens: 10, CacheUsageKnown: true}
+	v := Usage{InputTokens: 50, OutputTokens: 5, CacheReadTokens: 20, CacheUsageKnown: true}
+	got := u.Add(v)
+	if got.InputTokens != 150 || got.OutputTokens != 15 || got.CacheReadTokens != 80 || got.CacheCreationTokens != 10 || !got.CacheUsageKnown {
+		t.Errorf("Add = %+v", got)
+	}
+}
+
 func TestNormalizeStopReasons(t *testing.T) {
 	anthropicCases := map[string]string{
 		"end_turn":      StopEndTurn,

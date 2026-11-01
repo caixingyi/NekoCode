@@ -21,6 +21,7 @@ type compactDoneMsg struct {
 // startCompact 异步触发摘要压缩（force=true），结果通过 compactDoneMsg 回传。
 func (m *Model) startCompact() tea.Cmd {
 	profile := m.profile
+	system := m.systemPrompt()
 	msgs := make([]message.Message, len(m.sess.Messages))
 	copy(msgs, m.sess.Messages)
 	return func() tea.Msg {
@@ -28,7 +29,7 @@ func (m *Model) startCompact() tea.Cmd {
 		if err != nil {
 			return compactDoneMsg{err: err}
 		}
-		out, n, err := aictx.Summarize(context.Background(), prov, profile, msgs, true)
+		out, n, err := aictx.Summarize(context.Background(), prov, system, profile, msgs, true)
 		return compactDoneMsg{msgs: out, n: n, err: err}
 	}
 }
@@ -38,7 +39,7 @@ func (m *Model) saveSession() {
 	if m.store == nil {
 		return
 	}
-	m.sess.EstTokens = aictx.Estimate(m.profile.EffectiveSystemPrompt(), m.sess.Messages)
+	m.sess.EstTokens = aictx.Estimate(m.systemPrompt(), m.sess.Messages)
 	if err := m.store.Save(m.sess); err != nil {
 		m.notice = "保存会话失败: " + err.Error()
 	}

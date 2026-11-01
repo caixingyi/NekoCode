@@ -5,7 +5,9 @@ import (
 	"strings"
 	"time"
 
+	"nekocode/internal/environment"
 	"nekocode/internal/message"
+	"nekocode/internal/prompt"
 	"nekocode/internal/provider"
 	"nekocode/internal/tool"
 )
@@ -24,8 +26,8 @@ type Config struct {
 	// Provider 与 Registry 为必需项；Registry 为 nil 时所有工具调用都返回「未知工具」。
 	Provider provider.Provider
 	Registry *tool.Registry
-	// SystemPrompt 直接透传给 provider。
-	SystemPrompt string
+	// Prompt 是稳定的系统指令集；nil 时使用内置 prompt。
+	Prompt *prompt.Prompt
 	// PlanMode 为真时拦截写类工具（R15）。
 	PlanMode bool
 	// MaxTurns 为轮数上限，默认 25。
@@ -38,6 +40,12 @@ type Config struct {
 	Confirmer Confirmer
 	// ContextLimit 在每轮结束时被调用，返回 true 则中止循环（R21）；为 nil 表示不检查。
 	ContextLimit func([]message.Message) bool
+	// WorkDir 是环境采集使用的工作目录；空时由 environment.Collect 取当前目录。
+	WorkDir string
+	// RefreshEnv 为真时重新采集环境并替换旧 env 补充消息；会话内通常为 false。
+	RefreshEnv bool
+	// CollectEnv 仅用于测试注入；nil 时使用 environment.Collect。
+	CollectEnv func(context.Context, string) environment.Info
 }
 
 // Agent 是无状态的循环配置载体：同一实例可被多次 Run，也可并发使用。
@@ -56,6 +64,9 @@ func New(cfg Config) *Agent {
 	// 阈值 1 会让任何一次工具调用都算「重复」，没有意义，按默认值兜底。
 	if cfg.RepeatLimit < 2 {
 		cfg.RepeatLimit = defaultRepeatLimit
+	}
+	if cfg.Prompt == nil {
+		cfg.Prompt = prompt.New("")
 	}
 	return &Agent{cfg: cfg}
 }
