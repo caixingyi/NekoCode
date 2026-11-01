@@ -158,27 +158,62 @@ func TestDeriveTitle(t *testing.T) {
 		{"truncate long", []message.Message{
 			{Role: message.RoleUser, Content: strings.Repeat("一", 50)},
 		}, strings.Repeat("一", titleMaxRunes)},
-		{"whitespace user falls back", []message.Message{
+		{"skip note", []message.Message{
+			message.NewModeSupplement(2, true, true, "enter plan"),
+			{Role: message.RoleUser, Content: "真实问题"},
+		}, "真实问题"},
+		{"whitespace user", []message.Message{
 			{Role: message.RoleUser, Content: "   "},
 		}, ""},
-		{"no user falls back", []message.Message{
+		{"only note", []message.Message{
+			message.NewModeSupplement(2, true, true, "enter plan"),
+		}, ""},
+		{"no user", []message.Message{
 			{Role: message.RoleAssistant, Content: "x"},
 		}, ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := DeriveTitle(c.msgs)
-			if c.want == "" {
-				// 兜底应为时间戳格式（非空）。
-				if got == "" {
-					t.Errorf("fallback title empty")
-				}
-				return
-			}
-			if got != c.want {
+			if got := DeriveTitle(c.msgs); got != c.want {
 				t.Errorf("title = %q, want %q", got, c.want)
 			}
 		})
+	}
+}
+
+func TestDisplayTitle(t *testing.T) {
+	now := time.Date(2026, 10, 24, 12, 0, 0, 0, time.UTC)
+	s := &Session{Title: "T", CreatedAt: now}
+	if got := s.DisplayTitle(); got != "T" {
+		t.Errorf("DisplayTitle = %q, want T", got)
+	}
+	s.Title = ""
+	if got := s.DisplayTitle(); got != now.Format("01-02 15:04") {
+		t.Errorf("DisplayTitle fallback = %q", got)
+	}
+	s.CreatedAt = time.Time{}
+	if got := s.DisplayTitle(); got != "未命名会话" {
+		t.Errorf("DisplayTitle empty = %q", got)
+	}
+}
+
+func TestSaveKeepsEmptyTitleUntilRealUser(t *testing.T) {
+	dir := t.TempDir()
+	st := NewStore(dir)
+	sess := NewSession("claude")
+	sess.Messages = []message.Message{message.NewModeSupplement(2, true, true, "enter plan")}
+	if err := st.Save(sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Title != "" {
+		t.Fatalf("title should stay empty with only a note, got %q", sess.Title)
+	}
+	sess.Messages = append(sess.Messages, message.NewMessage(message.RoleUser, "真实问题"))
+	if err := st.Save(sess); err != nil {
+		t.Fatal(err)
+	}
+	if sess.Title != "真实问题" {
+		t.Errorf("title = %q, want 真实问题", sess.Title)
 	}
 }
 

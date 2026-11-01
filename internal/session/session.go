@@ -87,7 +87,9 @@ func (s *Store) Save(sess *Session) error {
 		sess.CreatedAt = sess.UpdatedAt
 	}
 	if sess.Title == "" {
-		sess.Title = DeriveTitle(sess.Messages)
+		if t := DeriveTitle(sess.Messages); t != "" {
+			sess.Title = t
+		}
 	}
 	data, err := json.MarshalIndent(sess, "", "  ")
 	if err != nil {
@@ -151,21 +153,35 @@ func (s *Store) path(id string) string {
 	return filepath.Join(s.dir, id+".json")
 }
 
-// DeriveTitle 按首条非空用户消息截断生成标题；无则用时间戳兜底（R19）。
+// DeriveTitle 按首条真实用户消息截断生成标题；补充消息跳过。
+// 没有真实用户消息时返回空串，由 Save 保持空标题，避免只有 mode 补充消息时
+// 提前把时间戳写死。
 func DeriveTitle(msgs []message.Message) string {
 	for _, m := range msgs {
-		if m.Role == message.RoleUser {
-			t := strings.TrimSpace(m.Content)
-			if t != "" {
-				r := []rune(t)
-				if len(r) > titleMaxRunes {
-					r = r[:titleMaxRunes]
-				}
-				return string(r)
+		if m.IsSupplement || m.Role != message.RoleUser {
+			continue
+		}
+		t := strings.TrimSpace(m.Content)
+		if t != "" {
+			r := []rune(t)
+			if len(r) > titleMaxRunes {
+				r = r[:titleMaxRunes]
 			}
+			return string(r)
 		}
 	}
-	return time.Now().Format("2006-01-02 15:04")
+	return ""
+}
+
+// DisplayTitle 返回用于展示的标题；没有真实用户消息时用创建时间兜底。
+func (s *Session) DisplayTitle() string {
+	if s.Title != "" {
+		return s.Title
+	}
+	if s.CreatedAt.IsZero() {
+		return "未命名会话"
+	}
+	return s.CreatedAt.Format("01-02 15:04")
 }
 
 // newID 生成形如 20060102-150405-<rand> 的会话 ID。

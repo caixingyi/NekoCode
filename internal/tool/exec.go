@@ -20,7 +20,7 @@ type runCommand struct{ root string }
 
 func (t runCommand) Name() string { return "run_command" }
 func (t runCommand) Description() string {
-	return "在工作目录下用 sh -c 执行 shell 命令，返回合并的 stdout/stderr 与退出码。"
+	return "在工作目录下用 sh -c 执行 shell 命令，返回合并的 stdout/stderr 与退出码。仅用于构建、测试、git、依赖安装等；不要用 cat/grep/find/sed/ls/pwd 替代专用工具或环境信息。"
 }
 func (t runCommand) NeedsConfirm() bool { return true }
 
