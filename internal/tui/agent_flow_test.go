@@ -93,7 +93,7 @@ func TestToolFlowAutoReadFile(t *testing.T) {
 	m = h.run(cmd)
 
 	// 期望：user, assistant(tool_calls), user(tool_results), assistant(final)
-	msgs := m.sess.Messages
+	msgs := realMessages(m.sess.Messages)
 	if len(msgs) != 4 {
 		t.Fatalf("len(msgs) = %d, want 4: %+v", len(msgs), msgs)
 	}
@@ -132,14 +132,15 @@ func TestLoopContinuesAcrossTurns(t *testing.T) {
 	m = h.run(h.m.startRun("读两个文件"))
 
 	// user + (assistant, results) × 2 + assistant(final) = 6
-	if len(m.sess.Messages) != 6 {
-		t.Fatalf("len(msgs) = %d, want 6: %+v", len(m.sess.Messages), m.sess.Messages)
+	msgs := realMessages(m.sess.Messages)
+	if len(msgs) != 6 {
+		t.Fatalf("len(msgs) = %d, want 6: %+v", len(msgs), msgs)
 	}
 	if m.turn != 3 {
 		t.Errorf("turn = %d, want 3", m.turn)
 	}
 	var texts []string
-	for _, msg := range m.sess.Messages {
+	for _, msg := range msgs {
 		if len(msg.ToolResults) > 0 {
 			texts = append(texts, msg.ToolResults[0].Content)
 		}
@@ -269,7 +270,7 @@ func TestToolFlowOpenAIEndToEnd(t *testing.T) {
 	h := newHarness(t, m)
 	m = h.run(h.m.startRun("读 a.txt"))
 
-	msgs := m.sess.Messages
+	msgs := realMessages(m.sess.Messages)
 	if len(msgs) != 4 {
 		t.Fatalf("len = %d, want 4: %+v", len(msgs), msgs)
 	}
@@ -457,8 +458,8 @@ func TestRunPersistsHistory(t *testing.T) {
 	if err != nil || len(list) != 1 {
 		t.Fatalf("store.List = %v, %v", list, err)
 	}
-	if len(list[0].Messages) != 4 {
-		t.Errorf("persisted messages = %d, want 4", len(list[0].Messages))
+	if got := len(realMessages(list[0].Messages)); got != 4 {
+		t.Errorf("persisted messages = %d, want 4", got)
 	}
 }
 
@@ -539,6 +540,7 @@ func TestTokenUsageParsedAndShown(t *testing.T) {
 	if m.totalUsage.InputTokens != 11 || m.totalUsage.OutputTokens != 7 {
 		t.Errorf("usage = %+v, want {11 7}", m.totalUsage)
 	}
+	m.width = 120 // 宽终端才展示累计 token 明细
 	header := m.header()
 	if !strings.Contains(header, "↑11") || !strings.Contains(header, "↓7") {
 		t.Errorf("状态栏应显示 token 用量: %q", header)

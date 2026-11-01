@@ -31,10 +31,11 @@ func TestIntegrationAnthropicStreamReconstruct(t *testing.T) {
 	h := newHarness(t, m)
 	m = h.run(h.m.startRun("hi"))
 
-	if len(m.sess.Messages) != 2 {
-		t.Fatalf("len(Messages) = %d, want 2", len(m.sess.Messages))
+	msgs := realMessages(m.sess.Messages)
+	if len(msgs) != 2 {
+		t.Fatalf("len(Messages) = %d, want 2", len(msgs))
 	}
-	last := m.sess.Messages[1]
+	last := msgs[1]
 	if last.Role != message.RoleAssistant || last.Content != "Hello world" {
 		t.Errorf("assistant = %+v", last)
 	}
@@ -56,8 +57,9 @@ func TestIntegrationOpenAIStreamReconstruct(t *testing.T) {
 	h := newHarness(t, m)
 	m = h.run(h.m.startRun("hi"))
 
-	if len(m.sess.Messages) != 2 || m.sess.Messages[1].Content != "Hi there" {
-		t.Errorf("messages = %+v", m.sess.Messages)
+	msgs := realMessages(m.sess.Messages)
+	if len(msgs) != 2 || msgs[1].Content != "Hi there" {
+		t.Errorf("messages = %+v", msgs)
 	}
 }
 
@@ -77,8 +79,9 @@ func TestIntegrationStreamErrorKeepsPartial(t *testing.T) {
 	h := newHarness(t, m)
 	m = h.run(h.m.startRun("hi"))
 
-	if len(m.sess.Messages) != 2 || m.sess.Messages[1].Content != "部分回复" {
-		t.Errorf("partial text not kept on error: %+v", m.sess.Messages)
+	msgs := realMessages(m.sess.Messages)
+	if len(msgs) != 2 || msgs[1].Content != "部分回复" {
+		t.Errorf("partial text not kept on error: %+v", msgs)
 	}
 	if m.errMsg == "" {
 		t.Error("error message not set")

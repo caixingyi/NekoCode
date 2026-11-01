@@ -26,7 +26,7 @@ flags:
   --help, -h         打印帮助并退出
 
 交互中:
-  Enter 发送 · Ctrl+J 换行 · Esc/Ctrl+C 取消循环 · Ctrl+C 空闲时退出
+  Enter 发送 · Ctrl+J 换行 · 空输入 ↑/↓ 或 PgUp/PgDn / Alt+↑/↓ 滚动历史 · Esc/Ctrl+C 取消循环 · Ctrl+C 空闲时退出
   /help 查看全部命令（含 /plan 计划模式）
 
 配置:

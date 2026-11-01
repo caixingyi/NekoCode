@@ -9,6 +9,8 @@ import (
 	tea "charm.land/bubbletea/v2"
 
 	"nekocode/internal/config"
+	"nekocode/internal/message"
+	"nekocode/internal/prompt"
 	"nekocode/internal/session"
 )
 
@@ -29,16 +31,20 @@ func (m *Model) handleCommand(text string) (tea.Model, tea.Cmd) {
 		m.quitting = true
 		return m, tea.Quit
 	case "/help":
-		m.notice = "命令: /help /quit /clear /new /resume [n] /switch [profile] /think /plan /compact"
+		m.notice = "命令: /help /quit /clear /new /resume [n] /switch [profile] /think /plan /compact · 空输入 ↑/↓、PgUp/PgDn 或 Alt+↑/↓ 滚动历史"
 		return m, nil
 	case "/clear":
 		m.sess.Messages = nil
+		m.envNeedsRefresh = true
+		m.followTail = true
 		m.notice = "已清空当前会话上下文"
 		m.saveSession()
 		return m, nil
 	case "/new":
 		m.saveSession()
 		m.sess = session.NewSession(m.profileName)
+		m.envNeedsRefresh = true
+		m.followTail = true
 		m.notice = "已新建会话"
 		return m, nil
 	case "/resume":
@@ -73,7 +79,7 @@ func (m *Model) handleResume(arg string) (tea.Model, tea.Cmd) {
 		var b strings.Builder
 		b.WriteString("历史会话（/resume <序号> 恢复）:")
 		for i, s := range list {
-			b.WriteString(fmt.Sprintf("\n%d. %s  [%s]  %s", i+1, s.Title, s.CurrentProfile, s.UpdatedAt.Format("01-02 15:04")))
+			b.WriteString(fmt.Sprintf("\n%d. %s  [%s]  %s", i+1, s.DisplayTitle(), s.CurrentProfile, s.UpdatedAt.Format("01-02 15:04")))
 		}
 		m.notice = b.String()
 		return m, nil
@@ -84,13 +90,21 @@ func (m *Model) handleResume(arg string) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.saveSession()
-	m.sess = list[n-1]
-	// 恢复时一并切换到该会话记录的 profile。
+	sess, err := m.store.Load(list[n-1].ID)
+	if err != nil {
+		m.errMsg = "恢复会话失败: " + err.Error()
+		return m, nil
+	}
+	m.sess = sess
+	// 恢复时一并切换到该会话记录的 profile，并重建 instructions。
 	if p, perr := m.cfg.Profile(m.sess.CurrentProfile); perr == nil {
 		m.profile = p
 		m.profileName = m.sess.CurrentProfile
+		m.instructions = prompt.New(p.SystemPrompt)
 	}
-	m.notice = "已恢复会话: " + m.sess.Title
+	m.envNeedsRefresh = true
+	m.followTail = true
+	m.notice = "已恢复会话: " + m.sess.DisplayTitle()
 	return m, nil
 }
 
@@ -112,6 +126,7 @@ func (m *Model) handleSwitch(arg string) (tea.Model, tea.Cmd) {
 	}
 	m.profile = p
 	m.profileName = arg
+	m.instructions = prompt.New(p.SystemPrompt)
 	m.sess.RecordSwitch(arg)
 	m.saveSession()
 	m.notice = "已切换到 " + arg + "（历史已携带）"
@@ -121,11 +136,20 @@ func (m *Model) handleSwitch(arg string) (tea.Model, tea.Cmd) {
 // handlePlan 切换计划模式（R14）。开关随会话落盘，/resume 一并恢复。
 func (m *Model) handlePlan() (tea.Model, tea.Cmd) {
 	m.sess.PlanMode = !m.sess.PlanMode
+	instructions := m.instructions
+	if instructions == nil {
+		instructions = prompt.New("")
+	}
+	var body string
 	if m.sess.PlanMode {
+		body = instructions.EnterPlanSupplement()
 		m.notice = "已进入计划模式：只读工具可用，写类工具会被拦截；再输入 /plan 退出"
 	} else {
+		body = instructions.ExitPlanSupplement()
 		m.notice = "已退出计划模式，写操作恢复正常"
 	}
+	seq := message.NextSupplementSeq(m.sess.Messages)
+	m.sess.Messages = append(m.sess.Messages, message.NewModeSupplement(seq, m.sess.PlanMode, true, body))
 	m.saveSession()
 	return m, nil
 }
