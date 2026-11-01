@@ -108,14 +108,33 @@ func (a *anthropicProvider) Stream(ctx context.Context, system string, tools []t
 				var e struct {
 					Message struct {
 						Usage struct {
-							InputTokens  int `json:"input_tokens"`
-							OutputTokens int `json:"output_tokens"`
+							InputTokens              int  `json:"input_tokens"`
+							OutputTokens             int  `json:"output_tokens"`
+							CacheCreationInputTokens *int `json:"cache_creation_input_tokens"`
+							CacheReadInputTokens     *int `json:"cache_read_input_tokens"`
 						} `json:"usage"`
 					} `json:"message"`
 				}
 				_ = json.Unmarshal(data, &e)
-				usage.InputTokens = e.Message.Usage.InputTokens
-				usage.OutputTokens = e.Message.Usage.OutputTokens
+				u := e.Message.Usage
+				cacheCreate, cacheRead := 0, 0
+				known := false
+				if u.CacheCreationInputTokens != nil {
+					cacheCreate = *u.CacheCreationInputTokens
+					known = true
+				}
+				if u.CacheReadInputTokens != nil {
+					cacheRead = *u.CacheReadInputTokens
+					known = true
+				}
+				// Anthropic 的 input_tokens 不含缓存部分；归一化为总输入。
+				usage = Usage{
+					InputTokens:         u.InputTokens + cacheCreate + cacheRead,
+					OutputTokens:        u.OutputTokens,
+					CacheReadTokens:     cacheRead,
+					CacheCreationTokens: cacheCreate,
+					CacheUsageKnown:     known,
+				}
 				gotUsage = true
 			case "message_delta":
 				var e struct {

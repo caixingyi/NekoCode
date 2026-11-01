@@ -47,6 +47,10 @@ type openaiChunk struct {
 	Usage *struct {
 		PromptTokens     int `json:"prompt_tokens"`
 		CompletionTokens int `json:"completion_tokens"`
+		// PromptTokensDetails 用于解析自动前缀缓存的命中量。
+		PromptTokensDetails *struct {
+			CachedTokens *int `json:"cached_tokens"`
+		} `json:"prompt_tokens_details"`
 	} `json:"usage"`
 }
 
@@ -130,7 +134,18 @@ func (o *openaiProvider) Stream(ctx context.Context, system string, tools []tool
 			_ = json.Unmarshal([]byte(ev.Data), &chunk)
 			// usage chunk 的 choices 为空，必须在 len(choices)==0 的提前返回之前取。
 			if chunk.Usage != nil {
-				usage = &Usage{InputTokens: chunk.Usage.PromptTokens, OutputTokens: chunk.Usage.CompletionTokens}
+				cached, known := 0, false
+				if d := chunk.Usage.PromptTokensDetails; d != nil && d.CachedTokens != nil {
+					cached = *d.CachedTokens
+					known = true
+				}
+				// OpenAI 的 prompt_tokens 已包含缓存读取，无需再加。
+				usage = &Usage{
+					InputTokens:     chunk.Usage.PromptTokens,
+					OutputTokens:    chunk.Usage.CompletionTokens,
+					CacheReadTokens: cached,
+					CacheUsageKnown: known,
+				}
 			}
 			if len(chunk.Choices) == 0 {
 				return nil
