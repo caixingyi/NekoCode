@@ -18,9 +18,6 @@ const (
 	ProtocolOpenAI    = "openai"
 )
 
-// DefaultSystemPrompt 是 profile 未设置 system_prompt 时注入的默认身份说明。
-const DefaultSystemPrompt = "你是 NekoCode，一个运行在终端的 AI 助手。请直接、简洁地回答用户的问题。"
-
 // 默认 base_url：profile 未设置时按 protocol 兜底。
 const (
 	defaultAnthropicBaseURL = "https://api.anthropic.com"
@@ -44,15 +41,17 @@ type ThinkingConfig struct {
 
 // Profile 描述一个 LLM 供应商配置。
 type Profile struct {
-	Protocol      string          `yaml:"protocol"`
-	Model         string          `yaml:"model"`
-	BaseURL       string          `yaml:"base_url"`
-	APIKey        string          `yaml:"api_key"`
-	ContextWindow int             `yaml:"context_window,omitempty"`
-	MaxTokens     int             `yaml:"max_tokens,omitempty"`
-	Temperature   *float64        `yaml:"temperature,omitempty"`
-	SystemPrompt  string          `yaml:"system_prompt,omitempty"`
-	Thinking      *ThinkingConfig `yaml:"thinking,omitempty"`
+	Protocol      string   `yaml:"protocol"`
+	Model         string   `yaml:"model"`
+	BaseURL       string   `yaml:"base_url"`
+	APIKey        string   `yaml:"api_key"`
+	ContextWindow int      `yaml:"context_window,omitempty"`
+	MaxTokens     int      `yaml:"max_tokens,omitempty"`
+	Temperature   *float64 `yaml:"temperature,omitempty"`
+	// SystemPrompt 是高优先级附加指令；由 internal/prompt 与内置模块一起拼装，
+	// 不能覆盖安全边界。
+	SystemPrompt string          `yaml:"system_prompt,omitempty"`
+	Thinking     *ThinkingConfig `yaml:"thinking,omitempty"`
 	// StreamUsage 控制 OpenAI 协议是否在请求里索要 token 用量
 	// （stream_options.include_usage）。未设置时默认开启；部分兼容网关不支持
 	// 该字段会直接报错，此时可显式设为 false。
@@ -81,14 +80,6 @@ func (p Profile) EffectiveMaxTokens() int {
 		return p.MaxTokens
 	}
 	return DefaultMaxTokens
-}
-
-// EffectiveSystemPrompt 返回 system_prompt，为空时返回默认身份说明。
-func (p Profile) EffectiveSystemPrompt() string {
-	if p.SystemPrompt != "" {
-		return p.SystemPrompt
-	}
-	return DefaultSystemPrompt
 }
 
 // Config 是 NekoCode 的顶层配置。
@@ -280,7 +271,7 @@ profiles:
     # max_tokens: 4096
     # temperature: 1.0           # 开启 thinking 时必须为 1.0
     # context_window: 200000
-    # system_prompt: ""
+    # system_prompt: ""          # 高优先级附加指令；不能覆盖安全边界
     # thinking:
     #   enabled: false
     #   budget_tokens: 2048      # >= 1024，且 < max_tokens
