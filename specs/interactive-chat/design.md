@@ -19,7 +19,7 @@
 
 **配置**
 - R1（全局+项目覆盖、active_profile 优先级）：`config.Load` 先读全局，再读项目本地（若存在），项目 profile 按名覆盖全局同名 profile；active_profile 解析顺序 `--profile` > 项目 > 全局。
-- R2（profile 字段 + 默认 system prompt）：`Profile` 结构含 4 核心字段 + 可选字段；`system_prompt` 为空时注入默认身份说明（`config.DefaultSystemPrompt`）。
+- R2（profile 字段 + 默认 system prompt）：`Profile` 结构含 4 核心字段 + 可选字段；`system_prompt` 作为自定义指令参与 system 拼装，为空时使用内置身份说明。
 - R3（protocol 取值校验）：加载时校验 `protocol ∈ {anthropic, openai}`，非法即报错退出。
 - R4（明文 key + gitignore 提示）：检测到项目 `.nekocode.yaml` 时，首次打印一行 `.gitignore` 提示。
 - R5（首启动生成模板）：全局配置不存在时写 `~/.nekocode/config.yaml` 模板（含两个注释示例 profile）并退出。
@@ -137,14 +137,13 @@ type ThinkingConfig struct {
 **统一消息模型**
 
 ```go
-type Role string // "system" | "user" | "assistant"
+type Role string // "user" | "assistant"
 
 type Message struct {
     Role      Role       `json:"role"`
     Content   string     `json:"content"`           // 文本
     Thinking  string     `json:"thinking,omitempty"`// Claude 思考文本
     Signature string     `json:"signature,omitempty"`// thinking 签名（回传 Anthropic 用）
-    IsSummary bool       `json:"is_summary,omitempty"`
     CreatedAt time.Time  `json:"created_at"`
 }
 ```
